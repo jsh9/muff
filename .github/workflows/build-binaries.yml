@@ -26,8 +26,8 @@ concurrency:
 permissions: {}
 
 env:
-  PACKAGE_NAME: ruff
-  MODULE_NAME: ruff
+  PACKAGE_NAME: muff
+  MODULE_NAME: muff
   PYTHON_VERSION: "3.13"
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
@@ -91,11 +91,11 @@ jobs:
       - name: "Archive binary"
         run: |
           TARGET=x86_64-apple-darwin
-          ARCHIVE_NAME=ruff-$TARGET
+          ARCHIVE_NAME=muff-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/ruff $ARCHIVE_NAME/ruff
+          cp target/$TARGET/release/muff $ARCHIVE_NAME/muff
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
@@ -128,8 +128,8 @@ jobs:
       - name: "Test wheel - aarch64"
         run: |
           pip install dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
-          ruff --help
-          python -m ruff --help
+          muff --help
+          python -m muff --help
       - name: "Upload wheels"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -138,11 +138,11 @@ jobs:
       - name: "Archive binary"
         run: |
           TARGET=aarch64-apple-darwin
-          ARCHIVE_NAME=ruff-$TARGET
+          ARCHIVE_NAME=muff-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/ruff $ARCHIVE_NAME/ruff
+          cp target/$TARGET/release/muff $ARCHIVE_NAME/muff
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
@@ -199,8 +199,8 @@ jobs:
       - name: "Archive binary"
         shell: bash
         run: |
-          ARCHIVE_FILE=ruff-${{ matrix.platform.target }}.zip
-          7z a $ARCHIVE_FILE ./target/${{ matrix.platform.target }}/release/ruff.exe
+          ARCHIVE_FILE=muff-${{ matrix.platform.target }}.zip
+          7z a $ARCHIVE_FILE ./target/${{ matrix.platform.target }}/release/muff.exe
           sha256sum $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -252,11 +252,11 @@ jobs:
           set -euo pipefail
 
           TARGET=${{ matrix.target }}
-          ARCHIVE_NAME=ruff-$TARGET
+          ARCHIVE_NAME=muff-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/ruff $ARCHIVE_NAME/ruff
+          cp target/$TARGET/release/muff $ARCHIVE_NAME/muff
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
@@ -325,7 +325,7 @@ jobs:
             pip3 install -U pip
           run: |
             pip3 install ${{ env.PACKAGE_NAME }} --no-index --find-links dist/ --force-reinstall
-            ruff --help
+            muff --help
       - name: "Upload wheels"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -337,11 +337,11 @@ jobs:
           set -euo pipefail
 
           TARGET=${{ matrix.platform.target }}
-          ARCHIVE_NAME=ruff-$TARGET
+          ARCHIVE_NAME=muff-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/ruff $ARCHIVE_NAME/ruff
+          cp target/$TARGET/release/muff $ARCHIVE_NAME/muff
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
@@ -399,11 +399,11 @@ jobs:
           set -euo pipefail
 
           TARGET=${{ matrix.target }}
-          ARCHIVE_NAME=ruff-$TARGET
+          ARCHIVE_NAME=muff-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/ruff $ARCHIVE_NAME/ruff
+          cp target/$TARGET/release/muff $ARCHIVE_NAME/muff
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
@@ -466,11 +466,11 @@ jobs:
           set -euo pipefail
 
           TARGET=${{ matrix.platform.target }}
-          ARCHIVE_NAME=ruff-$TARGET
+          ARCHIVE_NAME=muff-$TARGET
           ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
 
           mkdir -p $ARCHIVE_NAME
-          cp target/$TARGET/release/ruff $ARCHIVE_NAME/ruff
+          cp target/$TARGET/release/muff $ARCHIVE_NAME/muff
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
