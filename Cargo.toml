@@ -13,7 +13,7 @@ authors = ["Charlie Marsh <charlie.r.marsh@gmail.com>"]
 license = "MIT"
 
 [workspace.dependencies]
-ruff = { path = "crates/ruff" }
+muff = { path = "crates/ruff" }
 ruff_annotate_snippets = { path = "crates/ruff_annotate_snippets" }
 ruff_cache = { path = "crates/ruff_cache" }
 ruff_db = { path = "crates/ruff_db", default-features = false }

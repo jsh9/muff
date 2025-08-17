@@ -1,5 +1,5 @@
 [package]
-name = "ruff"
+name = "muff"
 version = "0.12.9"
 publish = true
 authors = { workspace = true }
@@ -10,7 +10,11 @@ documentation = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 readme = "../../README.md"
-default-run = "ruff"
+default-run = "muff"
+
+[[bin]]
+name = "muff"
+path = "src/main.rs"
 
 [dependencies]
 ruff_cache = { workspace = true }

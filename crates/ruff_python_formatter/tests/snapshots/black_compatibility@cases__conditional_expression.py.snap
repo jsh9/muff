@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/conditional_expression.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -135,12 +134,11 @@ a = "".join(
  def weird_default_argument(
 -    x=(
 -        some_long_value_name_foo_bar_baz
--        if SOME_CONSTANT
++        x=some_long_value_name_foo_bar_baz
+         if SOME_CONSTANT
 -        else some_fallback_value_foo_bar_baz
 -    ),
-+    x=some_long_value_name_foo_bar_baz
-+    if SOME_CONSTANT
-+    else some_fallback_value_foo_bar_baz,
++        else some_fallback_value_foo_bar_baz,
  ):
      pass
  
@@ -213,9 +211,9 @@ positional_argument_test(
 
 
 def weird_default_argument(
-    x=some_long_value_name_foo_bar_baz
-    if SOME_CONSTANT
-    else some_fallback_value_foo_bar_baz,
+        x=some_long_value_name_foo_bar_baz
+        if SOME_CONSTANT
+        else some_fallback_value_foo_bar_baz,
 ):
     pass
 

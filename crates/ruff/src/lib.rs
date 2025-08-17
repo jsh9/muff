@@ -30,6 +30,7 @@ mod commands;
 mod diagnostics;
 mod printer;
 pub mod resolve;
+pub mod settings;
 mod stdin;
 mod version;
 

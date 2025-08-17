@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/preview_comments7.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -194,7 +193,7 @@ square = Square(4) # type: Optional[Square]
          0.0456,
          0.0789,
          0.0123,
-@@ -91,53 +94,39 @@
+@@ -91,58 +94,44 @@
              # metadata_version errors.
              (
                  {},
@@ -264,6 +263,12 @@ square = Square(4) # type: Optional[Square]
              ),
          ],
      )
+     def test_fails_invalid_post_data(
+-        self, pyramid_config, db_request, post_data, message
++            self, pyramid_config, db_request, post_data, message
+     ): ...
+ 
+ 
 @@ -150,8 +139,8 @@
  
  # Regression test for https://github.com/psf/black/issues/3756.
@@ -413,7 +418,7 @@ class C:
         ],
     )
     def test_fails_invalid_post_data(
-        self, pyramid_config, db_request, post_data, message
+            self, pyramid_config, db_request, post_data, message
     ): ...
 
 

@@ -1,4 +1,6 @@
-use ruff_formatter::{FormatRuleWithOptions, format_args, write};
+use ruff_formatter::{
+    Argument, Arguments, FormatElement, FormatRuleWithOptions, format_args, write,
+};
 use ruff_python_ast::{AnyNodeRef, Parameters};
 use ruff_python_trivia::{CommentLinePosition, SimpleToken, SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -10,6 +12,48 @@ use crate::comments::{
 use crate::context::{NodeLevel, WithNodeLevel};
 use crate::expression::parentheses::empty_parenthesized;
 use crate::prelude::*;
+
+/// Custom two-level block indent for function parameters.
+/// Similar to `soft_block_indent` but applies two levels of indentation instead of one.
+fn soft_two_level_block_indent<Context>(
+    content: &impl Format<Context>,
+) -> TwoLevelBlockIndent<'_, Context> {
+    TwoLevelBlockIndent {
+        content: Argument::new(content),
+    }
+}
+
+#[derive(Copy, Clone)]
+struct TwoLevelBlockIndent<'a, Context> {
+    content: Argument<'a, Context>,
+}
+
+impl<Context> Format<Context> for TwoLevelBlockIndent<'_, Context> {
+    fn fmt(&self, f: &mut Formatter<Context>) -> FormatResult<()> {
+        let snapshot = f.snapshot();
+
+        f.write_element(FormatElement::Tag(Tag::StartIndent));
+        f.write_element(FormatElement::Tag(Tag::StartIndent)); // Second indent level
+
+        write!(f, [soft_line_break()])?;
+
+        let is_empty = {
+            let mut recording = f.start_recording();
+            recording.write_fmt(Arguments::from(&self.content))?;
+            recording.stop().is_empty()
+        };
+
+        if is_empty {
+            f.restore_snapshot(snapshot);
+            return Ok(());
+        }
+
+        f.write_element(FormatElement::Tag(Tag::EndIndent));
+        f.write_element(FormatElement::Tag(Tag::EndIndent)); // End second indent level
+
+        write!(f, [soft_line_break()])
+    }
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
 pub enum ParametersParentheses {
@@ -255,7 +299,7 @@ impl FormatNodeRule<Parameters> for FormatParameters {
                 [
                     token("("),
                     dangling_open_parenthesis_comments(parenthesis_dangling),
-                    soft_block_indent(&format_inner),
+                    soft_two_level_block_indent(&format_inner),
                     token(")")
                 ]
             )
@@ -269,7 +313,7 @@ impl FormatNodeRule<Parameters> for FormatParameters {
                 [
                     token("("),
                     dangling_open_parenthesis_comments(parenthesis_dangling),
-                    soft_block_indent(&group(&format_inner)),
+                    soft_two_level_block_indent(&group(&format_inner)),
                     token(")")
                 ]
             )

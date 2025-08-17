@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/stub_files/suite.pyi
-snapshot_kind: text
 ---
 ## Input
 ```python
@@ -200,8 +199,8 @@ else:
 
 class NoEmptyLinesBetweenFunctions:
     def multi_line_but_only_ellipsis(
-        self,
-        mandatory_release: float | None,
+            self,
+            mandatory_release: float | None,
     ) -> None: ...
     def only_ellipsis1(self) -> float: ...
     def only_ellipsis2(self) -> float | None: ...

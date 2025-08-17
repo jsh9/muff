@@ -82,7 +82,7 @@ def f(a):
 
 
 def g(
-    a,
+        a,
 ):
     pass
 

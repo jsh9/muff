@@ -1,0 +1,72 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/black/miscellaneous/force_py36.py
+---
+## Input
+
+```python
+# The input source must not contain any Py36-specific syntax (e.g. argument type
+# annotations, trailing comma after *rest) or this test becomes invalid.
+def long_function_name(argument_one, argument_two, argument_three, argument_four, argument_five, argument_six, *rest): pass
+```
+
+## Black Differences
+
+```diff
+--- Black
++++ Ruff
+@@ -1,12 +1,12 @@
+ # The input source must not contain any Py36-specific syntax (e.g. argument type
+ # annotations, trailing comma after *rest) or this test becomes invalid.
+ def long_function_name(
+-    argument_one,
+-    argument_two,
+-    argument_three,
+-    argument_four,
+-    argument_five,
+-    argument_six,
+-    *rest,
++        argument_one,
++        argument_two,
++        argument_three,
++        argument_four,
++        argument_five,
++        argument_six,
++        *rest,
+ ):
+     pass
+```
+
+## Ruff Output
+
+```python
+# The input source must not contain any Py36-specific syntax (e.g. argument type
+# annotations, trailing comma after *rest) or this test becomes invalid.
+def long_function_name(
+        argument_one,
+        argument_two,
+        argument_three,
+        argument_four,
+        argument_five,
+        argument_six,
+        *rest,
+):
+    pass
+```
+
+## Black Output
+
+```python
+# The input source must not contain any Py36-specific syntax (e.g. argument type
+# annotations, trailing comma after *rest) or this test becomes invalid.
+def long_function_name(
+    argument_one,
+    argument_two,
+    argument_three,
+    argument_four,
+    argument_five,
+    argument_six,
+    *rest,
+):
+    pass
+```

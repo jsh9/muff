@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/preview_multiline_strings.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -367,6 +366,22 @@ actual: {some_var}"""
  [
      """cow
  moos""",
+@@ -177,13 +218,13 @@
+ 
+ 
+ def dastardly_default_value(
+-    cow: String = json.loads("""this
++        cow: String = json.loads("""this
+ is
+ quite
+ the
+ dastadardly
+ value!"""),
+-    **kwargs,
++        **kwargs,
+ ):
+     pass
+ 
 @@ -206,7 +247,9 @@
      "c"
  )
@@ -603,13 +618,13 @@ barks""",
 
 
 def dastardly_default_value(
-    cow: String = json.loads("""this
+        cow: String = json.loads("""this
 is
 quite
 the
 dastadardly
 value!"""),
-    **kwargs,
+        **kwargs,
 ):
     pass
 

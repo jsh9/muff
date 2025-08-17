@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/function2.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -66,6 +65,15 @@ with hmm_but_this_should_get_two_preceding_newlines():
 ```diff
 --- Black
 +++ Ruff
+@@ -1,6 +1,6 @@
+ def f(
+-    a,
+-    **kwargs,
++        a,
++        **kwargs,
+ ) -> A:
+     with cache_dir():
+         if something:
 @@ -36,7 +36,6 @@
  
      def i_should_be_followed_by_only_one_newline():
@@ -88,8 +96,8 @@ with hmm_but_this_should_get_two_preceding_newlines():
 
 ```python
 def f(
-    a,
-    **kwargs,
+        a,
+        **kwargs,
 ) -> A:
     with cache_dir():
         if something:
