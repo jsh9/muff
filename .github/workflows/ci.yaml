@@ -901,7 +901,7 @@ jobs:
   benchmarks-instrumented:
     runs-on: ubuntu-24.04
     needs: determine_changes
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
+    if: false  # Disabled - benchmarks not needed for muff fork
     timeout-minutes: 20
     steps:
       - name: "Checkout Branch"
@@ -932,7 +932,7 @@ jobs:
   benchmarks-walltime:
     runs-on: codspeed-macro
     needs: determine_changes
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.ty == 'true' || github.ref == 'refs/heads/main') }}
+    if: false  # Disabled - benchmarks not needed for muff fork
     timeout-minutes: 20
     env:
       TY_LOG: ruff_benchmark=debug
