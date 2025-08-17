@@ -25,7 +25,7 @@ use ruff_linter::rules::{
     flake8_copyright, flake8_errmsg, flake8_gettext, flake8_implicit_str_concat,
     flake8_import_conventions, flake8_pytest_style, flake8_quotes, flake8_self,
     flake8_tidy_imports, flake8_type_checking, flake8_unused_arguments, isort, mccabe, pep8_naming,
-    pycodestyle, pydoclint, pydocstyle, pyflakes, pylint, pyupgrade, ruff,
+    pycodestyle, pydoclint, pydocstyle, pyflakes, pylint, pyupgrade,
 };
 use ruff_linter::settings::types::{
     IdentifierPattern, OutputFormat, PythonVersion, RequiredVersion,
@@ -3490,8 +3490,8 @@ pub struct RuffOptions {
 }
 
 impl RuffOptions {
-    pub fn into_settings(self) -> ruff::settings::Settings {
-        ruff::settings::Settings {
+    pub fn into_settings(self) -> ruff_linter::rules::ruff::settings::Settings {
+        ruff_linter::rules::ruff::settings::Settings {
             parenthesize_tuple_in_subscript: self
                 .parenthesize_tuple_in_subscript
                 .unwrap_or_default(),

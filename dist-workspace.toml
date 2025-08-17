@@ -1,6 +1,6 @@
 [workspace]
 members = ["cargo:."]
-packages = ["ruff"]
+packages = ["muff"]
 
 # Config for 'dist'
 [dist]

@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/pep604_union_types_line_breaks.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -105,32 +104,50 @@ def f(
  
  
  # this is a syntax error in the type annotation according to mypy, but it's not invalid *python* code, so make sure we don't mess with it and make it so.
-@@ -72,12 +72,10 @@
+@@ -71,31 +71,29 @@
+ 
  
  def foo(
-     i: int,
+-    i: int,
 -    x: (
 -        Loooooooooooooooooooooooong
--        | Looooooooooooooooong
--        | Looooooooooooooooooooong
++        i: int,
++        x: Loooooooooooooooooooooooong
+         | Looooooooooooooooong
+         | Looooooooooooooooooooong
 -        | Looooooong
 -    ),
-+    x: Loooooooooooooooooooooooong
-+    | Looooooooooooooooong
-+    | Looooooooooooooooooooong
-+    | Looooooong,
-     *,
-     s: str,
+-    *,
+-    s: str,
++        | Looooooong,
++        *,
++        s: str,
  ) -> None:
-@@ -88,7 +86,7 @@
+     pass
+ 
+ 
+ @app.get("/path/")
  async def foo(
-     q: str | None = Query(
-         None, title="Some long title", description="Some long description"
+-    q: str | None = Query(
+-        None, title="Some long title", description="Some long description"
 -    )
-+    ),
++        q: str | None = Query(
++            None, title="Some long title", description="Some long description"
++        ),
  ):
      pass
  
+ 
+ def f(
+-    max_jobs: int | None = Option(
+-        None, help="Maximum number of jobs to launch. And some additional text."
+-    ),
+-    another_option: bool = False,
++        max_jobs: int | None = Option(
++            None, help="Maximum number of jobs to launch. And some additional text."
++        ),
++        another_option: bool = False,
+ ): ...
 ```
 
 ## Ruff Output
@@ -209,31 +226,31 @@ def foo(i: (int,)) -> None: ...
 
 
 def foo(
-    i: int,
-    x: Loooooooooooooooooooooooong
-    | Looooooooooooooooong
-    | Looooooooooooooooooooong
-    | Looooooong,
-    *,
-    s: str,
+        i: int,
+        x: Loooooooooooooooooooooooong
+        | Looooooooooooooooong
+        | Looooooooooooooooooooong
+        | Looooooong,
+        *,
+        s: str,
 ) -> None:
     pass
 
 
 @app.get("/path/")
 async def foo(
-    q: str | None = Query(
-        None, title="Some long title", description="Some long description"
-    ),
+        q: str | None = Query(
+            None, title="Some long title", description="Some long description"
+        ),
 ):
     pass
 
 
 def f(
-    max_jobs: int | None = Option(
-        None, help="Maximum number of jobs to launch. And some additional text."
-    ),
-    another_option: bool = False,
+        max_jobs: int | None = Option(
+            None, help="Maximum number of jobs to launch. And some additional text."
+        ),
+        another_option: bool = False,
 ): ...
 ```
 

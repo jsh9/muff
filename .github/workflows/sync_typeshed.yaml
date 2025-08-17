@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Don't run the cron job on forks:
-    if: ${{ github.repository == 'astral-sh/ruff' || github.event_name != 'schedule' }}
+    if: false  # Disabled for muff fork
     permissions:
       contents: write
     steps:
@@ -107,7 +107,7 @@ jobs:
     # The job will also be skipped if the sync job failed, because it's specified in `needs` above,
     # and we haven't used `always()` in the `if` condition here
     # (https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#example-requiring-successful-dependent-jobs)
-    if: ${{ github.repository == 'astral-sh/ruff' || github.event_name != 'schedule' }}
+    if: false  # Disabled for muff fork
 
     permissions:
       contents: write
@@ -144,7 +144,7 @@ jobs:
     # The job will also be skipped if the sync or docstrings-windows jobs failed,
     # because they're specified in `needs` above and we haven't used an `always()` condition in the `if` here
     # (https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#example-requiring-successful-dependent-jobs)
-    if: ${{ github.repository == 'astral-sh/ruff' || github.event_name != 'schedule' }}
+    if: false  # Disabled for muff fork
 
     permissions:
       contents: write
@@ -188,7 +188,7 @@ jobs:
     name: Create an issue if the typeshed sync failed
     runs-on: ubuntu-latest
     needs: [sync, docstrings-windows, docstrings-macos-and-pr]
-    if: ${{ github.repository == 'astral-sh/ruff' && always() && github.event_name == 'schedule' && (needs.sync.result == 'failure' || needs.docstrings-windows.result == 'failure' || needs.docstrings-macos-and-pr.result == 'failure') }}
+    if: false  # Disabled for muff fork
     permissions:
       issues: write
     steps:

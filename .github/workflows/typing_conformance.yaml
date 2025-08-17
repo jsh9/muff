@@ -30,6 +30,7 @@ jobs:
   typing_conformance:
     name: Compute diagnostic diff
     runs-on: depot-ubuntu-22.04-32
+    if: false  # Disabled - typing conformance not needed for muff fork
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

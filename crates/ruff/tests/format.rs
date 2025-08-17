@@ -35,8 +35,8 @@ if condition:
     exit_code: 0
     ----- stdout -----
     def foo(
-        arg1,
-        arg2,
+            arg1,
+            arg2,
     ):
         print("Shouldn't change quotes")
 
@@ -851,8 +851,8 @@ if condition:
     exit_code: 0
     ----- stdout -----
     def foo(
-    	arg1,
-    	arg2,
+    		arg1,
+    		arg2,
     ):
     	print("Shouldn't change quotes")
 
@@ -1248,8 +1248,8 @@ fn test_diff() {
         +
         +
         +def some_function(
-        +    foo,
-        +    bar,
+        +        foo,
+        +        bar,
         +):
              # Another cell with IPython escape command
              foo = %pwd
@@ -1943,8 +1943,8 @@ def foo(arg1, arg2,):
     ----- stdout -----
 
     def foo(
-        arg1,
-        arg2,
+            arg1,
+            arg2,
     ):
         print("Shouldn't format this" )
 
@@ -2072,8 +2072,8 @@ def foo(arg1, arg2,):
     ----- stdout -----
 
     def foo(
-        arg1,
-        arg2,
+            arg1,
+            arg2,
     ):
         print("Shouldn't format this" )
 
@@ -2117,8 +2117,8 @@ def foo(arg1, arg2,):
     exit_code: 0
     ----- stdout -----
     def foo(
-        arg1,
-        arg2,
+            arg1,
+            arg2,
     ):
         print("Should format this" )
 

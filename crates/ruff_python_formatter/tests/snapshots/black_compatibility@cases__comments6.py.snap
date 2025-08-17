@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/comments6.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -131,7 +130,68 @@ aaaaaaaaaaaaa, bbbbbbbbb = map(list, map(itertools.chain.from_iterable, zip(*ite
 ```diff
 --- Black
 +++ Ruff
-@@ -49,9 +49,7 @@
+@@ -2,7 +2,7 @@
+ 
+ 
+ def f(
+-    a,  # type: int
++        a,  # type: int
+ ):
+     pass
+ 
+@@ -14,44 +14,42 @@
+ 
+ 
+ def f(
+-    a,  # type: int
+-    b,  # type: int
+-    c,  # type: int
+-    d,  # type: int
+-    e,  # type: int
+-    f,  # type: int
+-    g,  # type: int
+-    h,  # type: int
+-    i,  # type: int
++        a,  # type: int
++        b,  # type: int
++        c,  # type: int
++        d,  # type: int
++        e,  # type: int
++        f,  # type: int
++        g,  # type: int
++        h,  # type: int
++        i,  # type: int
+ ):
+     # type: (...) -> None
+     pass
+ 
+ 
+ def f(
+-    arg,  # type: int
+-    *args,  # type: *Any
+-    default=False,  # type: bool
+-    **kwargs,  # type: **Any
++        arg,  # type: int
++        *args,  # type: *Any
++        default=False,  # type: bool
++        **kwargs,  # type: **Any
+ ):
+     # type: (...) -> None
+     pass
+ 
+ 
+ def f(
+-    a,  # type: int
+-    b,  # type: int
+-    c,  # type: int
+-    d,  # type: int
++        a,  # type: int
++        b,  # type: int
++        c,  # type: int
++        d,  # type: int
+ ):
+     # type: (...) -> None
+ 
      element = 0  # type: int
      another_element = 1  # type: float
      another_element_with_long_name = 2  # type: int
@@ -142,6 +202,32 @@ aaaaaaaaaaaaa, bbbbbbbbb = map(list, map(itertools.chain.from_iterable, zip(*ite
      an_element_with_a_long_value = calls() or more_calls() and more()  # type: bool
  
      tup = (
+@@ -70,21 +68,21 @@
+ 
+ 
+ def f(
+-    x,  # not a type comment
+-    y,  # type: int
++        x,  # not a type comment
++        y,  # type: int
+ ):
+     # type: (...) -> None
+     pass
+ 
+ 
+ def f(
+-    x,  # not a type comment
++        x,  # not a type comment
+ ):  # type: (int) -> None
+     pass
+ 
+ 
+ def func(
+-    a=some_list[0],  # type: int
++        a=some_list[0],  # type: int
+ ):  # type: () -> int
+     c = call(
+         0.0123,
 @@ -100,7 +98,13 @@
      )
  
@@ -187,7 +273,7 @@ from typing import Any, Tuple
 
 
 def f(
-    a,  # type: int
+        a,  # type: int
 ):
     pass
 
@@ -199,35 +285,35 @@ def f(a, b, c, d, e, f, g, h, i):
 
 
 def f(
-    a,  # type: int
-    b,  # type: int
-    c,  # type: int
-    d,  # type: int
-    e,  # type: int
-    f,  # type: int
-    g,  # type: int
-    h,  # type: int
-    i,  # type: int
+        a,  # type: int
+        b,  # type: int
+        c,  # type: int
+        d,  # type: int
+        e,  # type: int
+        f,  # type: int
+        g,  # type: int
+        h,  # type: int
+        i,  # type: int
 ):
     # type: (...) -> None
     pass
 
 
 def f(
-    arg,  # type: int
-    *args,  # type: *Any
-    default=False,  # type: bool
-    **kwargs,  # type: **Any
+        arg,  # type: int
+        *args,  # type: *Any
+        default=False,  # type: bool
+        **kwargs,  # type: **Any
 ):
     # type: (...) -> None
     pass
 
 
 def f(
-    a,  # type: int
-    b,  # type: int
-    c,  # type: int
-    d,  # type: int
+        a,  # type: int
+        b,  # type: int
+        c,  # type: int
+        d,  # type: int
 ):
     # type: (...) -> None
 
@@ -253,21 +339,21 @@ def f(
 
 
 def f(
-    x,  # not a type comment
-    y,  # type: int
+        x,  # not a type comment
+        y,  # type: int
 ):
     # type: (...) -> None
     pass
 
 
 def f(
-    x,  # not a type comment
+        x,  # not a type comment
 ):  # type: (int) -> None
     pass
 
 
 def func(
-    a=some_list[0],  # type: int
+        a=some_list[0],  # type: int
 ):  # type: () -> int
     c = call(
         0.0123,

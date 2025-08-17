@@ -5,12 +5,12 @@ import sys
 import sysconfig
 
 
-def find_ruff_bin() -> str:
-    """Return the ruff binary path."""
+def find_muff_bin() -> str:
+    """Return the muff binary path."""
 
-    ruff_exe = "ruff" + sysconfig.get_config_var("EXE")
+    muff_exe = "muff" + sysconfig.get_config_var("EXE")
 
-    scripts_path = os.path.join(sysconfig.get_path("scripts"), ruff_exe)
+    scripts_path = os.path.join(sysconfig.get_path("scripts"), muff_exe)
     if os.path.isfile(scripts_path):
         return scripts_path
 
@@ -24,20 +24,20 @@ def find_ruff_bin() -> str:
         user_scheme = "posix_user"
 
     user_path = os.path.join(
-        sysconfig.get_path("scripts", scheme=user_scheme), ruff_exe
+        sysconfig.get_path("scripts", scheme=user_scheme), muff_exe
     )
     if os.path.isfile(user_path):
         return user_path
 
     # Search in `bin` adjacent to package root (as created by `pip install --target`).
     pkg_root = os.path.dirname(os.path.dirname(__file__))
-    target_path = os.path.join(pkg_root, "bin", ruff_exe)
+    target_path = os.path.join(pkg_root, "bin", muff_exe)
     if os.path.isfile(target_path):
         return target_path
 
     # Search for pip-specific build environments.
     #
-    # Expect to find ruff in <prefix>/pip-build-env-<rand>/overlay/bin/ruff
+    # Expect to find muff in <prefix>/pip-build-env-<rand>/overlay/bin/muff
     # Expect to find a "normal" folder at <prefix>/pip-build-env-<rand>/normal
     #
     # See: https://github.com/pypa/pip/blob/102d8187a1f5a4cd5de7a549fd8a9af34e89a54f/src/pip/_internal/build_env.py#L87
@@ -69,8 +69,8 @@ def find_ruff_bin() -> str:
             and maybe_overlay[-1].startswith("pip-build-env-")
             and maybe_overlay[-2] == "overlay"
         ):
-            # The overlay must contain the ruff binary.
-            candidate = os.path.join(paths[0], ruff_exe)
+            # The overlay must contain the muff binary.
+            candidate = os.path.join(paths[0], muff_exe)
             if os.path.isfile(candidate):
                 return candidate
 
@@ -78,11 +78,11 @@ def find_ruff_bin() -> str:
 
 
 if __name__ == "__main__":
-    ruff = find_ruff_bin()
+    muff = find_muff_bin()
     if sys.platform == "win32":
         import subprocess
 
-        completed_process = subprocess.run([ruff, *sys.argv[1:]])
+        completed_process = subprocess.run([muff, *sys.argv[1:]])
         sys.exit(completed_process.returncode)
     else:
-        os.execvp(ruff, [ruff, *sys.argv[1:]])
+        os.execvp(muff, [muff, *sys.argv[1:]])

@@ -1,7 +1,6 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/return_annotation_brackets.py
-snapshot_kind: text
 ---
 ## Input
 
@@ -111,7 +110,7 @@ def foo(a,b) -> tuple[int, int, int,]:
  # Don't lose the comments
 -def double(a: int) -> int:  # Hello
 +def double(
-+    a: int,
++        a: int,
 +) -> (  # Hello
 +    int
 +):
@@ -120,12 +119,49 @@ def foo(a,b) -> tuple[int, int, int,]:
  
 -def double(a: int) -> int:  # Hello
 +def double(
-+    a: int,
++        a: int,
 +) -> (
 +    int  # Hello
 +):
      return 2 * a
  
+ 
+@@ -51,17 +59,17 @@
+ 
+ 
+ def foo(
+-    a: int,
+-    b: int,
+-    c: int,
++        a: int,
++        b: int,
++        c: int,
+ ) -> intsdfsafafafdfdsasdfsfsdfasdfafdsafdfdsfasdskdsdsfdsafdsafsdfdasfffsfdsfdsafafhdskfhdsfjdslkfdlfsdkjhsdfjkdshfkljds:
+     return 2
+ 
+ 
+ def foo(
+-    a: int,
+-    b: int,
+-    c: int,
++        a: int,
++        b: int,
++        c: int,
+ ) -> (
+     intsdfsafafafdfdsasdfsfsdfasdfafdsafdfdsfasdskdsdsfdsafdsafsdfdasfffsfdsfdsafafhdskfhdsfjdslkfdlfsdkjhsdfjkdshfkljds
+     | intsdfsafafafdfdsasdfsfsdfasdfafdsafdfdsfasdskdsdsfdsafdsafsdfdasfffsfdsfdsafafhdskfhdsfjdslkfdlfsdkjhsdfjkdshfkljds
+@@ -71,9 +79,9 @@
+ 
+ # Split args but no need to split return
+ def foo(
+-    a: int,
+-    b: int,
+-    c: int,
++        a: int,
++        b: int,
++        c: int,
+ ) -> int:
+     return 2
  
 @@ -117,7 +125,9 @@
  
@@ -133,7 +169,7 @@ def foo(a,b) -> tuple[int, int, int,]:
  # Magic trailing comma example, with params
 -def foo(a, b) -> tuple[
 +def foo(
-+    a, b
++        a, b
 +) -> tuple[
      int,
      int,
@@ -168,7 +204,7 @@ def double(a: int) -> int:
 
 # Don't lose the comments
 def double(
-    a: int,
+        a: int,
 ) -> (  # Hello
     int
 ):
@@ -176,7 +212,7 @@ def double(
 
 
 def double(
-    a: int,
+        a: int,
 ) -> (
     int  # Hello
 ):
@@ -204,17 +240,17 @@ def foo() -> (
 
 
 def foo(
-    a: int,
-    b: int,
-    c: int,
+        a: int,
+        b: int,
+        c: int,
 ) -> intsdfsafafafdfdsasdfsfsdfasdfafdsafdfdsfasdskdsdsfdsafdsafsdfdasfffsfdsfdsafafhdskfhdsfjdslkfdlfsdkjhsdfjkdshfkljds:
     return 2
 
 
 def foo(
-    a: int,
-    b: int,
-    c: int,
+        a: int,
+        b: int,
+        c: int,
 ) -> (
     intsdfsafafafdfdsasdfsfsdfasdfafdsafdfdsfasdskdsdsfdsafdsafsdfdasfffsfdsfdsafafhdskfhdsfjdslkfdlfsdkjhsdfjkdshfkljds
     | intsdfsafafafdfdsasdfsfsdfasdfafdsafdfdsfasdskdsdsfdsafdsafsdfdasfffsfdsfdsafafhdskfhdsfjdslkfdlfsdkjhsdfjkdshfkljds
@@ -224,9 +260,9 @@ def foo(
 
 # Split args but no need to split return
 def foo(
-    a: int,
-    b: int,
-    c: int,
+        a: int,
+        b: int,
+        c: int,
 ) -> int:
     return 2
 
@@ -271,7 +307,7 @@ def foo() -> tuple[
 
 # Magic trailing comma example, with params
 def foo(
-    a, b
+        a, b
 ) -> tuple[
     int,
     int,
