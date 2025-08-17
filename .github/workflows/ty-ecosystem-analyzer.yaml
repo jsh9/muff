@@ -23,8 +23,8 @@ jobs:
   ty-ecosystem-analyzer:
     name: Compute diagnostic diff
     runs-on: depot-ubuntu-22.04-32
+    if: false  # Disabled - ty ecosystem not needed for muff fork
     timeout-minutes: 20
-    if: contains(github.event.label.name, 'ecosystem-analyzer')
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

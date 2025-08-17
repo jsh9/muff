@@ -1,4 +1,4 @@
-# Build ruff on all platforms.
+# Build muff on all platforms.
 #
 # Generates both wheels (for PyPI) and archived binaries (for GitHub releases).
 #

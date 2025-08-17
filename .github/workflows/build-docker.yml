@@ -24,6 +24,7 @@ jobs:
   docker-build:
     name: Build Docker image (ghcr.io/astral-sh/ruff) for ${{ matrix.platform }}
     runs-on: ubuntu-latest
+    if: false  # Disabled - Docker not needed for muff fork
     environment:
       name: release
     strategy:
@@ -106,11 +107,11 @@ jobs:
   docker-publish:
     name: Publish Docker image (ghcr.io/astral-sh/ruff)
     runs-on: ubuntu-latest
+    if: false  # Disabled - Docker not needed for muff fork
     environment:
       name: release
     needs:
       - docker-build
-    if: ${{ inputs.plan != '' && !fromJson(inputs.plan).announcement_tag_is_implicit }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -152,11 +153,11 @@ jobs:
   docker-publish-extra:
     name: Publish additional Docker image based on ${{ matrix.image-mapping }}
     runs-on: ubuntu-latest
+    if: false  # Disabled - Docker not needed for muff fork
     environment:
       name: release
     needs:
       - docker-publish
-    if: ${{ inputs.plan != '' && !fromJson(inputs.plan).announcement_tag_is_implicit }}
     strategy:
       fail-fast: false
       matrix:
@@ -249,11 +250,11 @@ jobs:
   docker-republish:
     name: Annotate Docker image (ghcr.io/astral-sh/ruff)
     runs-on: ubuntu-latest
+    if: false  # Disabled - Docker not needed for muff fork
     environment:
       name: release
     needs:
       - docker-publish-extra
-    if: ${{ inputs.plan != '' && !fromJson(inputs.plan).announcement_tag_is_implicit }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
