@@ -34,13 +34,29 @@ if ! command -v pip3 &> /dev/null; then
     PIP_CMD="pip"
 fi
 
-# Install maturin if not available
-if ! command -v maturin &> /dev/null; then
-    echo "📦 Installing maturin..."
-    $PIP_CMD install --user maturin
-    # Add ~/.local/bin to PATH if it's not there
-    export PATH="$HOME/.local/bin:$PATH"
+# Create virtual environment for build tools
+VENV_DIR="$HOME/.muff-build-env"
+echo "📦 Setting up build environment..."
+
+if [[ ! -d "$VENV_DIR" ]]; then
+    echo "Creating virtual environment at $VENV_DIR..."
+    python3 -m venv "$VENV_DIR"
 fi
+
+# Activate virtual environment
+source "$VENV_DIR/bin/activate"
+
+# Install/upgrade maturin in virtual environment
+echo "Installing maturin in virtual environment..."
+pip install --upgrade pip maturin
+
+# Verify installation
+if ! command -v maturin &> /dev/null; then
+    echo "❌ Failed to install maturin in virtual environment"
+    exit 1
+fi
+
+echo "✅ Build environment ready (using virtual environment)"
 
 # Detect current architecture
 CURRENT_ARCH=$(uname -m)
@@ -184,11 +200,16 @@ echo "🧪 Testing Linux builds..."
 # Find compatible wheel for current architecture
 if ls dist/*-*-linux_${CURRENT_ARCH}.whl 1> /dev/null 2>&1; then
     echo "🔍 Found compatible wheel for testing..."
-    if $PIP_CMD install dist/*-*-linux_${CURRENT_ARCH}.whl --force-reinstall --user; then
+    
+    WHEEL_FILE=$(ls dist/*-*-linux_${CURRENT_ARCH}.whl | head -1)
+    
+    # Install and test in the build virtual environment
+    echo "Installing wheel in virtual environment for testing..."
+    if pip install "$WHEEL_FILE" --force-reinstall; then
         echo "✅ Wheel installation successful"
-        # Add ~/.local/bin to PATH for testing
-        export PATH="$HOME/.local/bin:$PATH"
-        if $MODULE_NAME --help >/dev/null 2>&1 && python3 -m $MODULE_NAME --help >/dev/null 2>&1; then
+        
+        # Test functionality in the virtual environment
+        if $MODULE_NAME --help >/dev/null 2>&1 && python -m $MODULE_NAME --help >/dev/null 2>&1; then
             echo "✅ Wheel functionality test passed"
         else
             echo "⚠️  Wheel installed but functionality test failed (non-critical)"
