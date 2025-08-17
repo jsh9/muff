@@ -81,12 +81,18 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # Check python3-venv specifically (common missing package)
-if ! python3 -m venv --help &> /dev/null; then
+# Test actual venv creation rather than just --help
+echo "🔍 Testing Python virtual environment capability..."
+TEST_VENV_DIR="/tmp/test-venv-$$"
+if ! python3 -m venv "$TEST_VENV_DIR" &> /dev/null; then
+    rm -rf "$TEST_VENV_DIR" 2>/dev/null
+    
     # Get Python version to install the correct venv package
     PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
     VENV_PACKAGE="python${PYTHON_VERSION}-venv"
     
-    echo "📦 Python $PYTHON_VERSION detected, need $VENV_PACKAGE package"
+    echo "📦 Python $PYTHON_VERSION detected, virtual environment creation failed"
+    echo "📦 Need to install $VENV_PACKAGE package"
     
     # Try version-specific package first, then fallback to generic
     if ! install_package "$VENV_PACKAGE" "python$PYTHON_VERSION-venv package"; then
@@ -95,6 +101,23 @@ if ! python3 -m venv --help &> /dev/null; then
             exit 1
         fi
     fi
+    
+    # Test again after installation
+    echo "🔍 Testing virtual environment creation after package installation..."
+    if ! python3 -m venv "$TEST_VENV_DIR" &> /dev/null; then
+        rm -rf "$TEST_VENV_DIR" 2>/dev/null
+        echo "❌ Virtual environment creation still failing after package installation"
+        echo "💡 You may need to install additional packages manually:"
+        echo "   sudo apt install python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-distutils"
+        echo "   sudo apt install python3-venv python3-distutils"
+        exit 1
+    else
+        rm -rf "$TEST_VENV_DIR"
+        echo "✅ Virtual environment creation test passed"
+    fi
+else
+    rm -rf "$TEST_VENV_DIR"
+    echo "✅ Virtual environment capability verified"
 fi
 
 # Check Rust/Cargo
@@ -180,12 +203,34 @@ if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
     
     if ! python3 -m venv "$VENV_DIR"; then
         echo "❌ Failed to create virtual environment on retry"
-        echo "💡 Install the correct python venv package:"
+        
+        # Try to automatically install the missing package
         if [[ "$PYTHON_VERSION" != "unknown" ]]; then
-            echo "   sudo apt install python${PYTHON_VERSION}-venv"
+            VENV_PACKAGE="python${PYTHON_VERSION}-venv"
+            echo "🔧 Attempting to install missing $VENV_PACKAGE package..."
+            
+            if install_package "$VENV_PACKAGE" "python${PYTHON_VERSION}-venv package (emergency fix)"; then
+                echo "🔄 Retrying virtual environment creation after emergency fix..."
+                if python3 -m venv "$VENV_DIR"; then
+                    echo "✅ Virtual environment created successfully after emergency fix!"
+                else
+                    echo "❌ Still failed after installing $VENV_PACKAGE"
+                    echo "💡 Try these manual commands:"
+                    echo "   sudo apt install python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-distutils"
+                    echo "   sudo apt install python3-venv python3-distutils python3-dev"
+                    exit 1
+                fi
+            else
+                echo "💡 Install the correct python venv package manually:"
+                echo "   sudo apt install python${PYTHON_VERSION}-venv"
+                echo "   sudo apt install python3-venv"
+                exit 1
+            fi
+        else
+            echo "💡 Install the python venv package:"
+            echo "   sudo apt install python3-venv"
+            exit 1
         fi
-        echo "   sudo apt install python3-venv"
-        exit 1
     fi
 fi
 

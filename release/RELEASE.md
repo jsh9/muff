@@ -295,11 +295,15 @@ twine upload dist/*
 ```bash
 # If you get "ensurepip is not available" error
 # The script now automatically handles version-specific packages like:
-sudo apt install python3.12-venv  # For Python 3.12
-sudo apt install python3.11-venv  # For Python 3.11
-sudo apt install python3-venv     # Generic fallback
+sudo apt install python3.12-venv python3.12-distutils  # For Python 3.12
+sudo apt install python3.11-venv python3.11-distutils  # For Python 3.11
+sudo apt install python3-venv python3-distutils        # Generic fallback
 
-# Script automatically detects Python version and installs correct package
+# Sometimes you may also need:
+sudo apt install python3-dev python3-pip
+
+# Script automatically detects Python version and installs correct packages
+# It also tests actual venv creation, not just --help command
 ```
 
 #### 8.4.2 Fresh Ubuntu Machine Setup
