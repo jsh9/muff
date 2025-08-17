@@ -55,7 +55,7 @@ jobs:
           args: --out dist
       - name: "Test sdist"
         run: |
-          pip install dist/"${PACKAGE_NAME}"-*.tar.gz --force-reinstall
+          pip install dist/${PACKAGE_NAME}-*.tar.gz --force-reinstall
           "${MODULE_NAME}" --help
           python -m "${MODULE_NAME}" --help
       - name: "Upload sdist"
