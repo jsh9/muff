@@ -9,23 +9,85 @@ MODULE_NAME="muff"
 
 echo "🐧 Building muff natively on Linux..."
 
-# Check dependencies
+# Function to install packages with user consent
+install_package() {
+    local package=$1
+    local description=$2
+    
+    echo "📦 $description is required but not installed"
+    read -p "Install $package? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if sudo apt update && sudo apt install -y "$package"; then
+            echo "✅ Successfully installed $package"
+            return 0
+        else
+            echo "❌ Failed to install $package"
+            return 1
+        fi
+    else
+        echo "❌ Cannot continue without $description"
+        return 1
+    fi
+}
+
+# Check and install dependencies
+echo "🔍 Checking dependencies..."
+
+# Check for essential build tools first
+if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
+    if ! install_package "build-essential" "essential build tools (gcc, make, etc.)"; then
+        exit 1
+    fi
+fi
+
+# Check for curl (needed for Rust installation)
+if ! command -v curl &> /dev/null; then
+    if ! install_package "curl" "curl (needed for downloading Rust)"; then
+        exit 1
+    fi
+fi
+
+# Check Python 3
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is required but not installed"
-    echo "💡 Install with: sudo apt update && sudo apt install python3 python3-pip"
-    exit 1
+    if ! install_package "python3 python3-pip python3-venv" "Python 3 and pip"; then
+        exit 1
+    fi
 fi
 
+# Check python3-venv specifically (common missing package)
+if ! python3 -m venv --help &> /dev/null; then
+    if ! install_package "python3-venv" "python3-venv package"; then
+        exit 1
+    fi
+fi
+
+# Check Rust/Cargo
 if ! command -v cargo &> /dev/null; then
-    echo "❌ Rust/Cargo is required but not installed"
-    echo "💡 Install with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-    exit 1
+    echo "📦 Rust/Cargo is required but not installed"
+    echo "Installing Rust via rustup..."
+    if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
+        source ~/.cargo/env
+        echo "✅ Successfully installed Rust"
+    else
+        echo "❌ Failed to install Rust"
+        echo "💡 Please install manually: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        exit 1
+    fi
 fi
 
+# Ensure cargo is in PATH
+if ! command -v cargo &> /dev/null; then
+    if [[ -f ~/.cargo/env ]]; then
+        source ~/.cargo/env
+    fi
+fi
+
+# Check pip
 if ! command -v pip3 &> /dev/null && ! command -v pip &> /dev/null; then
-    echo "❌ pip is required but not installed"
-    echo "💡 Install with: sudo apt install python3-pip"
-    exit 1
+    if ! install_package "python3-pip" "pip (Python package installer)"; then
+        exit 1
+    fi
 fi
 
 # Use pip3 if available, otherwise pip
@@ -112,13 +174,21 @@ if command -v "$CROSS_COMPILER" &> /dev/null; then
     CROSS_AVAILABLE=true
 else
     echo "⚠️  Cross-compiler not found: $CROSS_COMPILER"
-    echo "💡 To enable cross-compilation, install:"
+    
+    # Offer to install cross-compilation tools
     if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
-        echo "    sudo apt install gcc-aarch64-linux-gnu"
+        CROSS_PACKAGE="gcc-aarch64-linux-gnu"
+        TARGET_ARCH="ARM64 (aarch64)"
     else
-        echo "    sudo apt install gcc-x86-64-linux-gnu"
+        CROSS_PACKAGE="gcc-x86-64-linux-gnu"
+        TARGET_ARCH="x86_64"
     fi
-    echo "    (Cross-compilation will be skipped)"
+    
+    if install_package "$CROSS_PACKAGE" "cross-compiler for $TARGET_ARCH"; then
+        CROSS_AVAILABLE=true
+    else
+        echo "Cross-compilation will be skipped (only building for $NATIVE_TARGET)"
+    fi
 fi
 
 # Clean previous builds
@@ -266,13 +336,15 @@ done
 
 echo ""
 echo "💡 Notes:"
+echo "   - All prerequisites automatically checked and installed with user consent"
 echo "   - Native build for $NATIVE_TARGET should always work"
 if [[ "$CROSS_AVAILABLE" == "true" ]]; then
     echo "   - Cross-compilation for $CROSS_TARGET attempted"
 else
-    echo "   - Cross-compilation skipped (install cross-compiler if needed)"
+    echo "   - Cross-compilation skipped (cross-compiler not installed)"
 fi
 echo "   - Test binaries on target systems before releasing"
+echo "   - Build environment isolated in virtual environment: $VENV_DIR"
 
 # Clean up temporary files
 echo ""

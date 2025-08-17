@@ -11,13 +11,24 @@ The release process consists of these steps:
 
 ## 2. Prerequisites
 
-### 2.1 Required Tools
+### 2.1 Automatic Prerequisites (Linux Script)
+The Linux build script (`step-1-build-linux.sh`) automatically handles prerequisites:
+- **build-essential** (gcc, make, etc.)
+- **curl** (for Rust installation)
+- **python3, python3-pip, python3-venv**
+- **rustc/cargo** (installed via rustup if missing)
+- **Cross-compilation tools** (gcc-aarch64-linux-gnu for ARM builds)
+
+All prerequisites are installed with user consent via interactive prompts.
+
+### 2.2 Manual Prerequisites (macOS/Windows Scripts)
+For macOS and Windows scripts, ensure you have:
 - **Python 3** with `pip`
-- **Rust/Cargo** (for building)
+- **Rust/Cargo** (install via [rustup.rs](https://rustup.rs/))
 - **GitHub CLI** (`brew install gh`) for releases
 - **uv** (auto-installed by scripts) for PyPI publishing
 
-### 2.2 Optional Cross-compilation Tools
+### 2.3 Optional Cross-compilation Tools
 For building Linux and Windows binaries from macOS:
 ```bash
 # Option 1: Use cargo-cross (recommended)
