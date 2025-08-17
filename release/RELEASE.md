@@ -289,9 +289,31 @@ pip install twine
 twine upload dist/*
 ```
 
-### 8.4 Windows-Specific Issues
+### 8.4 Linux-Specific Issues
 
-#### 8.4.1 WSL Environment
+#### 8.4.1 Python Virtual Environment Issues
+```bash
+# If you get "ensurepip is not available" error
+# The script now automatically handles version-specific packages like:
+sudo apt install python3.12-venv  # For Python 3.12
+sudo apt install python3.11-venv  # For Python 3.11
+sudo apt install python3-venv     # Generic fallback
+
+# Script automatically detects Python version and installs correct package
+```
+
+#### 8.4.2 Fresh Ubuntu Machine Setup
+```bash
+# The script handles all these automatically, but if needed manually:
+sudo apt update
+sudo apt install build-essential curl git
+sudo apt install libssl-dev pkg-config
+sudo apt install python3 python3-pip python3-venv
+```
+
+### 8.5 Windows-Specific Issues
+
+#### 8.5.1 WSL Environment
 ```bash
 # If script doesn't detect WSL properly
 cat /proc/version  # Should show Microsoft
@@ -303,7 +325,7 @@ wsl --update
 chmod +x release/step-1-build-windows.sh
 ```
 
-#### 8.4.2 MSVC Target Issues
+#### 8.5.2 MSVC Target Issues
 ```powershell
 # Install Visual Studio Build Tools
 winget install Microsoft.VisualStudio.2022.BuildTools
@@ -315,7 +337,7 @@ where cl.exe
 set PATH=%PATH%;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.XX.XXXXX\bin\Hostx64\x64
 ```
 
-#### 8.4.3 Git Bash Path Issues
+#### 8.5.3 Git Bash Path Issues
 ```bash
 # If Python not found in Git Bash
 which python
@@ -325,7 +347,7 @@ which python3
 export PATH="/c/Users/$USERNAME/AppData/Local/Programs/Python/Python311:$PATH"
 ```
 
-### 8.5 README.md Git Diff
+### 8.6 README.md Git Diff
 The build scripts modify `README.md` for PyPI compatibility. This is normal and the changes are temporary during build.
 
 ## 9. Tips

@@ -82,8 +82,18 @@ fi
 
 # Check python3-venv specifically (common missing package)
 if ! python3 -m venv --help &> /dev/null; then
-    if ! install_package "python3-venv" "python3-venv package"; then
-        exit 1
+    # Get Python version to install the correct venv package
+    PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    VENV_PACKAGE="python${PYTHON_VERSION}-venv"
+    
+    echo "📦 Python $PYTHON_VERSION detected, need $VENV_PACKAGE package"
+    
+    # Try version-specific package first, then fallback to generic
+    if ! install_package "$VENV_PACKAGE" "python$PYTHON_VERSION-venv package"; then
+        echo "📦 Trying generic python3-venv package as fallback..."
+        if ! install_package "python3-venv" "python3-venv package (generic)"; then
+            exit 1
+        fi
     fi
 fi
 
@@ -129,8 +139,33 @@ if [[ ! -d "$VENV_DIR" ]]; then
     echo "Creating virtual environment at $VENV_DIR..."
     if ! python3 -m venv "$VENV_DIR"; then
         echo "❌ Failed to create virtual environment"
-        echo "💡 Make sure python3-venv is installed: sudo apt install python3-venv"
-        exit 1
+        
+        # Get Python version for better error message
+        PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "unknown")
+        
+        echo "💡 This might be due to missing python venv package. Try:"
+        echo "   sudo apt install python${PYTHON_VERSION}-venv"
+        echo "   sudo apt install python3-venv"
+        echo "   sudo apt install python3-pip python3-venv"
+        
+        # Try to install the missing package automatically
+        echo "🔧 Attempting to fix automatically..."
+        if [[ "$PYTHON_VERSION" != "unknown" ]]; then
+            VENV_PACKAGE="python${PYTHON_VERSION}-venv"
+            if install_package "$VENV_PACKAGE" "python${PYTHON_VERSION}-venv package (auto-fix)"; then
+                echo "🔄 Retrying virtual environment creation..."
+                if python3 -m venv "$VENV_DIR"; then
+                    echo "✅ Virtual environment created successfully after auto-fix!"
+                else
+                    echo "❌ Still failed after installing $VENV_PACKAGE"
+                    exit 1
+                fi
+            else
+                exit 1
+            fi
+        else
+            exit 1
+        fi
     fi
 fi
 
@@ -139,9 +174,17 @@ if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
     echo "❌ Virtual environment activation script not found"
     echo "💡 Removing corrupted venv and retrying..."
     rm -rf "$VENV_DIR"
+    
+    # Get Python version for the retry
+    PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "unknown")
+    
     if ! python3 -m venv "$VENV_DIR"; then
         echo "❌ Failed to create virtual environment on retry"
-        echo "💡 Make sure python3-venv is installed: sudo apt install python3-venv"
+        echo "💡 Install the correct python venv package:"
+        if [[ "$PYTHON_VERSION" != "unknown" ]]; then
+            echo "   sudo apt install python${PYTHON_VERSION}-venv"
+        fi
+        echo "   sudo apt install python3-venv"
         exit 1
     fi
 fi
@@ -170,9 +213,10 @@ echo "   ✅ build-essential (gcc, make, etc.)"
 echo "   ✅ curl (for downloads)"
 echo "   ✅ git (version control)"
 echo "   ✅ libssl-dev & pkg-config (for Rust builds)"
-echo "   ✅ python3, python3-pip, python3-venv"
+echo "   ✅ python3, python3-pip, python3-venv (version-specific)"
 echo "   ✅ Rust/Cargo toolchain"
 echo "   ✅ maturin (Python wheel builder)"
+echo "   ✅ Virtual environment with auto-fix for version-specific packages"
 
 # Detect current architecture
 CURRENT_ARCH=$(uname -m)
