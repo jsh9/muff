@@ -141,11 +141,9 @@ echo "✅ Build environment ready (using virtual environment)"
 CURRENT_ARCH=$(uname -m)
 if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
     NATIVE_TARGET="x86_64-unknown-linux-gnu"
-    CROSS_TARGET="aarch64-unknown-linux-gnu"
     PLATFORM_NAME="x86_64 (Intel/AMD)"
 elif [[ "$CURRENT_ARCH" == "aarch64" ]]; then
     NATIVE_TARGET="aarch64-unknown-linux-gnu"
-    CROSS_TARGET="x86_64-unknown-linux-gnu"
     PLATFORM_NAME="aarch64 (ARM64)"
 else
     echo "❌ Unsupported architecture: $CURRENT_ARCH"
@@ -154,42 +152,10 @@ fi
 
 echo "🏗️  Detected platform: Linux $PLATFORM_NAME"
 echo "📋 Native target: $NATIVE_TARGET"
-echo "📋 Cross-compile target: $CROSS_TARGET"
 
-# Install Rust targets
-echo "🎯 Installing Rust targets..."
+# Install Rust target
+echo "🎯 Installing Rust target..."
 rustup target add "$NATIVE_TARGET"
-rustup target add "$CROSS_TARGET"
-
-# Check for cross-compilation tools for the other architecture
-if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
-    CROSS_COMPILER="aarch64-linux-gnu-gcc"
-elif [[ "$CURRENT_ARCH" == "aarch64" ]]; then
-    CROSS_COMPILER="x86_64-linux-gnu-gcc"
-fi
-
-CROSS_AVAILABLE=false
-if command -v "$CROSS_COMPILER" &> /dev/null; then
-    echo "✅ Found cross-compiler: $CROSS_COMPILER"
-    CROSS_AVAILABLE=true
-else
-    echo "⚠️  Cross-compiler not found: $CROSS_COMPILER"
-    
-    # Offer to install cross-compilation tools
-    if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
-        CROSS_PACKAGE="gcc-aarch64-linux-gnu"
-        TARGET_ARCH="ARM64 (aarch64)"
-    else
-        CROSS_PACKAGE="gcc-x86-64-linux-gnu"
-        TARGET_ARCH="x86_64"
-    fi
-    
-    if install_package "$CROSS_PACKAGE" "cross-compiler for $TARGET_ARCH"; then
-        CROSS_AVAILABLE=true
-    else
-        echo "Cross-compilation will be skipped (only building for $NATIVE_TARGET)"
-    fi
-fi
 
 # Clean previous builds
 echo "🧹 Cleaning previous builds..."
@@ -201,16 +167,9 @@ rm -f muff-*-unknown-linux-gnu.tar.gz*
 echo "📝 Preparing README.md for PyPI..."
 python3 release/transform_readme_temp.py --action create
 
-# Define targets to build
-TARGETS=("$NATIVE_TARGET")
-if [[ "$CROSS_AVAILABLE" == "true" ]]; then
-    TARGETS+=("$CROSS_TARGET")
-fi
-
-# Build function for each target
+# Build function
 build_target() {
     local target=$1
-    local is_native=$2
     echo ""
     echo "🏗️  Building for $target..."
     
@@ -224,18 +183,6 @@ build_target() {
     
     # Build binary with cargo
     echo "🔧 Building binary for $target..."
-    
-    # Set cross-compilation environment if needed
-    if [[ "$is_native" == "false" ]]; then
-        if [[ "$target" == "aarch64-unknown-linux-gnu" ]]; then
-            export CC="aarch64-linux-gnu-gcc"
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-linux-gnu-gcc"
-        elif [[ "$target" == "x86_64-unknown-linux-gnu" ]]; then
-            export CC="x86_64-linux-gnu-gcc"
-            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="x86_64-linux-gnu-gcc"
-        fi
-    fi
-    
     if cargo build --release --locked --target "$target"; then
         echo "✅ Binary built successfully for $target"
         
@@ -261,19 +208,11 @@ build_target() {
     fi
 }
 
-# Build for all targets
+# Build for native target only
 success=true
-for target in "${TARGETS[@]}"; do
-    if [[ "$target" == "$NATIVE_TARGET" ]]; then
-        if ! build_target "$target" "true"; then
-            success=false
-        fi
-    else
-        if ! build_target "$target" "false"; then
-            echo "⚠️  Cross-compilation failed for $target (continuing...)"
-        fi
-    fi
-done
+if ! build_target "$NATIVE_TARGET"; then
+    success=false
+fi
 
 # Build source distribution
 echo ""
@@ -326,23 +265,17 @@ ls -la muff-*-unknown-linux-gnu.tar.gz 2>/dev/null || echo "     (No binary arch
 
 echo ""
 echo "🎯 Built targets:"
-for target in "${TARGETS[@]}"; do
-    if [[ -f "target/$target/release/muff" ]]; then
-        echo "   ✅ $target"
-    else
-        echo "   ❌ $target (failed)"
-    fi
-done
+if [[ -f "target/$NATIVE_TARGET/release/muff" ]]; then
+    echo "   ✅ $NATIVE_TARGET"
+else
+    echo "   ❌ $NATIVE_TARGET (failed)"
+fi
 
 echo ""
 echo "💡 Notes:"
 echo "   - All prerequisites automatically checked and installed with user consent"
-echo "   - Native build for $NATIVE_TARGET should always work"
-if [[ "$CROSS_AVAILABLE" == "true" ]]; then
-    echo "   - Cross-compilation for $CROSS_TARGET attempted"
-else
-    echo "   - Cross-compilation skipped (cross-compiler not installed)"
-fi
+echo "   - Native build for $NATIVE_TARGET only (no cross-compilation)"
+echo "   - For ARM64 builds, run this script on an ARM64 Linux machine"
 echo "   - Test binaries on target systems before releasing"
 echo "   - Build environment isolated in virtual environment: $VENV_DIR"
 

@@ -17,9 +17,8 @@ The Linux build script (`step-1-build-linux.sh`) automatically handles prerequis
 - **curl** (for Rust installation)
 - **python3, python3-pip, python3-venv**
 - **rustc/cargo** (installed via rustup if missing)
-- **Cross-compilation tools** (gcc-aarch64-linux-gnu for ARM builds)
 
-All prerequisites are installed with user consent via interactive prompts.
+All prerequisites are installed with user consent via interactive prompts. **Note**: Cross-compilation removed due to reliability issues - run on native architecture instead.
 
 ### 2.2 Automatic Prerequisites (Windows Script)
 The Windows build script (`step-1-build-windows.sh`) handles prerequisites automatically for different Windows environments:
@@ -135,13 +134,16 @@ Builds for macOS (both Intel and Apple Silicon):
 #### 3.2.2 `step-1-build-linux.sh`
 Builds natively on Linux (with automatic prerequisite installation):
 ```bash
-./release/step-1-build-linux.sh
+# On x86_64 Linux machine
+./release/step-1-build-linux.sh  # Builds x86_64 only
+
+# On ARM64 Linux machine  
+./release/step-1-build-linux.sh  # Builds ARM64 only
 ```
 **Requirements:** Linux machine (EC2, VPS, local Linux, etc.)
 **Outputs:**
-- `dist/*.whl` - Python wheels  
-- `muff-x86_64-unknown-linux-gnu.tar.gz` - Linux x64 binary
-- `muff-aarch64-unknown-linux-gnu.tar.gz` - Linux ARM64 binary (if cross-tools installed)
+- `dist/*.whl` - Python wheels for current architecture
+- `muff-{arch}-unknown-linux-gnu.tar.gz` - Linux binary for current architecture
 
 #### 3.2.3 `step-1-build-windows.sh`
 Builds natively on Windows (supports WSL, Git Bash, MSYS2):
@@ -177,14 +179,19 @@ Publishes wheels to PyPI:
 ### 4.2 Method 2: Native Builds on Multiple Platforms (Recommended for Production)
 For production releases, build natively on each platform for best compatibility:
 
-**On macOS:**
+**On macOS (builds both Intel and Apple Silicon):**
 ```bash
 ./release/step-1-build-macos.sh
 ```
 
-**On Linux (EC2/VPS/local):**
+**On x86_64 Linux machine:**
 ```bash
-./release/step-1-build-linux.sh
+./release/step-1-build-linux.sh  # Builds x86_64 Linux
+```
+
+**On ARM64 Linux machine:**
+```bash
+./release/step-1-build-linux.sh  # Builds ARM64 Linux
 ```
 
 **On Windows (WSL/Git Bash):**
