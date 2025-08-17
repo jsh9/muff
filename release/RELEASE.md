@@ -11,14 +11,17 @@ The release process consists of these steps:
 
 ## 2. Prerequisites
 
-### 2.1 Automatic Prerequisites (Linux Script)
-The Linux build script (`step-1-build-linux.sh`) automatically handles prerequisites:
+### 2.1 Automatic Prerequisites (Linux Script - Fresh Ubuntu Ready!)
+The Linux build script (`step-1-build-linux.sh`) automatically handles ALL prerequisites for fresh Ubuntu machines:
+- **Package lists update** (for fresh machines)
 - **build-essential** (gcc, make, etc.)
-- **curl** (for Rust installation)
+- **curl** (for downloads)
+- **git** (version control system)  
+- **libssl-dev & pkg-config** (for Rust builds)
 - **python3, python3-pip, python3-venv**
 - **rustc/cargo** (installed via rustup if missing)
 
-All prerequisites are installed with user consent via interactive prompts. **Note**: Cross-compilation removed due to reliability issues - run on native architecture instead.
+✅ **Works on completely fresh Ubuntu machines!** All prerequisites are automatically detected and installed with user consent via interactive prompts. **Note**: Cross-compilation removed due to reliability issues - run on native architecture instead.
 
 ### 2.2 Automatic Prerequisites (Windows Script)
 The Windows build script (`step-1-build-windows.sh`) handles prerequisites automatically for different Windows environments:

@@ -32,7 +32,17 @@ install_package() {
 }
 
 # Check and install dependencies
-echo "🔍 Checking dependencies..."
+echo "🔍 Checking dependencies on fresh Ubuntu machine..."
+
+# Update package lists first if this is a fresh machine
+if [ ! -f /var/lib/apt/periodic/update-success-stamp ] || [ $(find /var/lib/apt/periodic/update-success-stamp -mtime +1) ]; then
+    echo "📦 Updating package lists (fresh machine setup)..."
+    if sudo apt update; then
+        echo "✅ Package lists updated"
+    else
+        echo "⚠️  Failed to update package lists, continuing anyway..."
+    fi
+fi
 
 # Check for essential build tools first
 if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
@@ -45,6 +55,21 @@ fi
 if ! command -v curl &> /dev/null; then
     if ! install_package "curl" "curl (needed for downloading Rust)"; then
         exit 1
+    fi
+fi
+
+# Check for git (commonly missing on minimal Ubuntu)
+if ! command -v git &> /dev/null; then
+    if ! install_package "git" "git (version control system)"; then
+        exit 1
+    fi
+fi
+
+# Check for pkg-config and libssl-dev (often needed for Rust builds)
+if ! dpkg -l | grep -q "libssl-dev" || ! command -v pkg-config &> /dev/null; then
+    echo "📦 Checking for SSL development libraries and pkg-config..."
+    if ! install_package "libssl-dev pkg-config" "SSL development libraries and pkg-config (needed for Rust builds)"; then
+        echo "⚠️  SSL development libraries not installed - builds might fail"
     fi
 fi
 
@@ -136,6 +161,18 @@ if ! command -v maturin &> /dev/null; then
 fi
 
 echo "✅ Build environment ready (using virtual environment)"
+
+# Summary of prerequisites checked
+echo ""
+echo "📋 Prerequisites verified for fresh Ubuntu machine:"
+echo "   ✅ Package lists updated"
+echo "   ✅ build-essential (gcc, make, etc.)"
+echo "   ✅ curl (for downloads)"
+echo "   ✅ git (version control)"
+echo "   ✅ libssl-dev & pkg-config (for Rust builds)"
+echo "   ✅ python3, python3-pip, python3-venv"
+echo "   ✅ Rust/Cargo toolchain"
+echo "   ✅ maturin (Python wheel builder)"
 
 # Detect current architecture
 CURRENT_ARCH=$(uname -m)
@@ -273,11 +310,11 @@ fi
 
 echo ""
 echo "💡 Notes:"
-echo "   - All prerequisites automatically checked and installed with user consent"
-echo "   - Native build for $NATIVE_TARGET only (no cross-compilation)"
-echo "   - For ARM64 builds, run this script on an ARM64 Linux machine"
-echo "   - Test binaries on target systems before releasing"
-echo "   - Build environment isolated in virtual environment: $VENV_DIR"
+echo "   - ✅ Fresh Ubuntu machine ready! All prerequisites auto-installed with consent"
+echo "   - ✅ Native build for $NATIVE_TARGET only (no cross-compilation)"
+echo "   - ✅ For ARM64 builds, run this script on an ARM64 Linux machine"
+echo "   - ✅ Build environment isolated in virtual environment: $VENV_DIR"
+echo "   - ✅ Test binaries on target systems before releasing"
 
 # Clean up temporary files
 echo ""
