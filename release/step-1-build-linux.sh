@@ -40,10 +40,27 @@ echo "📦 Setting up build environment..."
 
 if [[ ! -d "$VENV_DIR" ]]; then
     echo "Creating virtual environment at $VENV_DIR..."
-    python3 -m venv "$VENV_DIR"
+    if ! python3 -m venv "$VENV_DIR"; then
+        echo "❌ Failed to create virtual environment"
+        echo "💡 Make sure python3-venv is installed: sudo apt install python3-venv"
+        exit 1
+    fi
+fi
+
+# Verify virtual environment was created properly
+if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
+    echo "❌ Virtual environment activation script not found"
+    echo "💡 Removing corrupted venv and retrying..."
+    rm -rf "$VENV_DIR"
+    if ! python3 -m venv "$VENV_DIR"; then
+        echo "❌ Failed to create virtual environment on retry"
+        echo "💡 Make sure python3-venv is installed: sudo apt install python3-venv"
+        exit 1
+    fi
 fi
 
 # Activate virtual environment
+echo "Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
 
 # Install/upgrade maturin in virtual environment
