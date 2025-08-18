@@ -106,7 +106,7 @@ pip install muff
 ### From GitHub Release
 \`\`\`bash
 # Download and extract the binary
-curl -LO https://github.com/$(gh repo view --json owner,name -q '.owner.login + \"/\" + .name')/releases/download/$VERSION_TAG/$ARCHIVE_FILE
+curl -LO https://github.com/$(gh repo view --json owner,name -q '.owner.login + "/" + .name')/releases/download/$VERSION_TAG/$ARCHIVE_FILE
 tar -xzf $ARCHIVE_FILE
 # Move to PATH
 sudo mv muff-$TARGET/muff /usr/local/bin/
@@ -118,7 +118,7 @@ sudo mv muff-$TARGET/muff /usr/local/bin/
 $(cat "$CHECKSUM_FILE")
 \`\`\`
 
-**Full Changelog**: https://github.com/$(gh repo view --json owner,name -q '.owner.login + \"/\" + .name')/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "Initial")...$VERSION_TAG"
+**Full Changelog**: https://github.com/$(gh repo view --json owner,name -q '.owner.login + "/" + .name')/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "Initial")...$VERSION_TAG"
 
 # Write release notes to temporary file
 NOTES_FILE=$(mktemp)
