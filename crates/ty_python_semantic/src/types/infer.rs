@@ -1117,13 +1117,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             //     - Check for inheritance from a `@final` classes
             //     - If the class is a protocol class: check for inheritance from a non-protocol class
             for (i, base_class) in class.explicit_bases(self.db()).iter().enumerate() {
-                if let Some((class, solid_base)) = base_class
-                    .to_class_type(self.db())
-                    .and_then(|class| Some((class, class.nearest_solid_base(self.db())?)))
-                {
-                    solid_bases.insert(solid_base, i, class.class_literal(self.db()).0);
-                }
-
                 let base_class = match base_class {
                     Type::SpecialForm(SpecialFormType::Generic) => {
                         if let Some(builder) = self
@@ -1155,13 +1148,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         );
                         continue;
                     }
-                    Type::ClassLiteral(class) => class,
-                    // dynamic/unknown bases are never `@final`
+                    Type::ClassLiteral(class) => ClassType::NonGeneric(*class),
+                    Type::GenericAlias(class) => ClassType::Generic(*class),
                     _ => continue,
                 };
 
+                if let Some(solid_base) = base_class.nearest_solid_base(self.db()) {
+                    solid_bases.insert(solid_base, i, base_class.class_literal(self.db()).0);
+                }
+
                 if is_protocol
-                    && !(base_class.is_protocol(self.db())
+                    && !(base_class.class_literal(self.db()).0.is_protocol(self.db())
                         || base_class.is_known(self.db(), KnownClass::Object))
                 {
                     if let Some(builder) = self
@@ -4028,6 +4025,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             | Type::WrapperDescriptor(_)
             | Type::DataclassDecorator(_)
             | Type::DataclassTransformer(_)
+            | Type::NonInferableTypeVar(..)
             | Type::TypeVar(..)
             | Type::AlwaysTruthy
             | Type::AlwaysFalsy
@@ -7234,6 +7232,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 | Type::BytesLiteral(_)
                 | Type::EnumLiteral(_)
                 | Type::BoundSuper(_)
+                | Type::NonInferableTypeVar(_)
                 | Type::TypeVar(_)
                 | Type::TypeIs(_)
                 | Type::TypedDict(_),
@@ -7575,6 +7574,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 | Type::BytesLiteral(_)
                 | Type::EnumLiteral(_)
                 | Type::BoundSuper(_)
+                | Type::NonInferableTypeVar(_)
                 | Type::TypeVar(_)
                 | Type::TypeIs(_)
                 | Type::TypedDict(_),
@@ -7604,6 +7604,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 | Type::BytesLiteral(_)
                 | Type::EnumLiteral(_)
                 | Type::BoundSuper(_)
+                | Type::NonInferableTypeVar(_)
                 | Type::TypeVar(_)
                 | Type::TypeIs(_)
                 | Type::TypedDict(_),
@@ -8655,7 +8656,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .next()
             .expect("valid bindings should have matching overload");
         Type::from(generic_class.apply_specialization(self.db(), |_| {
-            generic_context.specialize_partial(self.db(), overload.parameter_types())
+            generic_context
+                .specialize_partial(self.db(), overload.parameter_types().iter().copied())
         }))
     }
 
@@ -10607,7 +10609,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
                 let mut signature_iter = callable_binding.into_iter().map(|binding| {
                     if argument_type.is_bound_method() {
-                        binding.signature.bind_self()
+                        binding.signature.bind_self(self.db(), Some(argument_type))
                     } else {
                         binding.signature.clone()
                     }
@@ -10783,7 +10785,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             SpecialFormType::TypingSelf
             | SpecialFormType::TypeAlias
             | SpecialFormType::TypedDict
-            | SpecialFormType::Unknown => {
+            | SpecialFormType::Unknown
+            | SpecialFormType::NamedTuple => {
                 self.infer_type_expression(arguments_slice);
 
                 if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
@@ -10808,7 +10811,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             SpecialFormType::Tuple => {
                 Type::tuple(self.infer_tuple_type_expression(arguments_slice))
             }
-            SpecialFormType::Generic | SpecialFormType::Protocol | SpecialFormType::NamedTuple => {
+            SpecialFormType::Generic | SpecialFormType::Protocol => {
                 self.infer_expression(arguments_slice);
                 if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
                     builder.into_diagnostic(format_args!(
