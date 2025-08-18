@@ -8,26 +8,53 @@ MODULE_NAME="muff"
 
 echo "🍎 Building muff for macOS..."
 
-# Check dependencies
+# Check and install prerequisites
+echo "🔍 Checking prerequisites..."
+
+# Check Homebrew
+if ! command -v brew &> /dev/null; then
+    echo "⚠️  Homebrew not found. Installing Homebrew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    
+    # Add Homebrew to PATH for current session
+    if [[ -f "/opt/homebrew/bin/brew" ]]; then
+        export PATH="/opt/homebrew/bin:$PATH"
+    elif [[ -f "/usr/local/bin/brew" ]]; then
+        export PATH="/usr/local/bin:$PATH"
+    fi
+fi
+
+# Check Python 3
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is required but not installed"
-    exit 1
+    echo "⚠️  Python 3 not found. Installing via Homebrew..."
+    brew install python
 fi
 
+# Check pip
+if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+    echo "⚠️  pip not found. Installing via Python..."
+    python3 -m ensurepip --upgrade
+fi
+
+# Use pip3 if pip is not available
+PIP_CMD="pip"
+if ! command -v pip &> /dev/null && command -v pip3 &> /dev/null; then
+    PIP_CMD="pip3"
+fi
+
+# Check Rust/Cargo
 if ! command -v cargo &> /dev/null; then
-    echo "❌ Rust/Cargo is required but not installed"
-    exit 1
+    echo "⚠️  Rust/Cargo not found. Installing via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source ~/.cargo/env
 fi
 
-if ! command -v pip &> /dev/null; then
-    echo "❌ pip is required but not installed"
-    exit 1
-fi
+echo "✅ Prerequisites check complete"
 
 # Install maturin if not available
 if ! command -v maturin &> /dev/null; then
     echo "📦 Installing maturin..."
-    pip install maturin
+    $PIP_CMD install maturin
 fi
 
 # Install macOS targets
