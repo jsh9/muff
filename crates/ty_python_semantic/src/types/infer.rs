@@ -90,7 +90,7 @@ use crate::semantic_index::{
     ApplicableConstraints, EnclosingSnapshotResult, SemanticIndex, place_table, semantic_index,
 };
 use crate::types::call::{Binding, Bindings, CallArguments, CallError, CallErrorKind};
-use crate::types::class::{CodeGeneratorKind, Field, MetaclassErrorKind};
+use crate::types::class::{CodeGeneratorKind, MetaclassErrorKind};
 use crate::types::diagnostic::{
     self, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS, CONFLICTING_METACLASS,
     CYCLIC_CLASS_DEFINITION, DIVISION_BY_ZERO, DUPLICATE_KW_ONLY, INCONSISTENT_MRO,
@@ -105,6 +105,7 @@ use crate::types::diagnostic::{
     report_invalid_arguments_to_callable, report_invalid_assignment,
     report_invalid_attribute_assignment, report_invalid_generator_function_return_type,
     report_invalid_key_on_typed_dict, report_invalid_return_type,
+    report_namedtuple_field_without_default_after_field_with_default,
     report_possibly_unbound_attribute,
 };
 use crate::types::enums::is_enum_class;
@@ -1110,11 +1111,34 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 continue;
             }
 
-            let is_protocol = class.is_protocol(self.db());
             let is_named_tuple = CodeGeneratorKind::NamedTuple.matches(self.db(), class);
+
+            // (2) If it's a `NamedTuple` class, check that no field without a default value
+            // appears after a field with a default value.
+            if is_named_tuple {
+                let mut field_with_default_encountered = None;
+
+                for (field_name, field) in class.own_fields(self.db(), None) {
+                    if field.default_ty.is_some() {
+                        field_with_default_encountered = Some(field_name);
+                    } else if let Some(field_with_default) = field_with_default_encountered.as_ref()
+                    {
+                        report_namedtuple_field_without_default_after_field_with_default(
+                            &self.context,
+                            class,
+                            self.index,
+                            &field_name,
+                            field_with_default,
+                        );
+                    }
+                }
+            }
+
+            let is_protocol = class.is_protocol(self.db());
+
             let mut solid_bases = IncompatibleBases::default();
 
-            // (2) Iterate through the class's explicit bases to check for various possible errors:
+            // (3) Iterate through the class's explicit bases to check for various possible errors:
             //     - Check for inheritance from plain `Generic`,
             //     - Check for inheritance from a `@final` classes
             //     - If the class is a protocol class: check for inheritance from a non-protocol class
@@ -1208,7 +1232,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
 
-            // (3) Check that the class's MRO is resolvable
+            // (4) Check that the class's MRO is resolvable
             match class.try_mro(self.db(), None) {
                 Err(mro_error) => match mro_error.reason() {
                     MroErrorKind::DuplicateBases(duplicates) => {
@@ -1279,7 +1303,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
 
-            // (4) Check that the class's metaclass can be determined without error.
+            // (5) Check that the class's metaclass can be determined without error.
             if let Err(metaclass_error) = class.try_metaclass(self.db()) {
                 match metaclass_error.reason() {
                     MetaclassErrorKind::Cycle => {
@@ -1376,36 +1400,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
 
-            // (5) Check that a dataclass does not have more than one `KW_ONLY`.
+            // (6) Check that a dataclass does not have more than one `KW_ONLY`.
             if let Some(field_policy @ CodeGeneratorKind::DataclassLike) =
                 CodeGeneratorKind::from_class(self.db(), class)
             {
                 let specialization = None;
-                let mut kw_only_field_names = vec![];
 
-                for (
-                    name,
-                    Field {
-                        declared_ty: field_ty,
-                        ..
-                    },
-                ) in class.fields(self.db(), specialization, field_policy)
-                {
-                    let Some(instance) = field_ty.into_nominal_instance() else {
-                        continue;
-                    };
+                let kw_only_sentinel_fields: Vec<_> = class
+                    .fields(self.db(), specialization, field_policy)
+                    .into_iter()
+                    .filter_map(|(name, field)| {
+                        field.is_kw_only_sentinel(self.db()).then_some(name)
+                    })
+                    .collect();
 
-                    if !instance
-                        .class(self.db())
-                        .is_known(self.db(), KnownClass::KwOnly)
-                    {
-                        continue;
-                    }
-
-                    kw_only_field_names.push(name);
-                }
-
-                if kw_only_field_names.len() > 1 {
+                if kw_only_sentinel_fields.len() > 1 {
                     // TODO: The fields should be displayed in a subdiagnostic.
                     if let Some(builder) = self
                         .context
@@ -1417,7 +1426,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                         diagnostic.info(format_args!(
                             "`KW_ONLY` fields: {}",
-                            kw_only_field_names
+                            kw_only_sentinel_fields
                                 .iter()
                                 .map(|name| format!("`{name}`"))
                                 .join(", ")
