@@ -124,8 +124,8 @@ use crate::types::{
     MemberLookupPolicy, MetaclassCandidate, PEP695TypeAliasType, Parameter, ParameterForm,
     Parameters, SpecialFormType, SubclassOfType, Truthiness, Type, TypeAliasType,
     TypeAndQualifiers, TypeIsType, TypeQualifiers, TypeVarBoundOrConstraintsEvaluation,
-    TypeVarDefaultEvaluation, TypeVarInstance, TypeVarKind, TypeVarVariance, UnionBuilder,
-    UnionType, binding_type, todo_type,
+    TypeVarDefaultEvaluation, TypeVarInstance, TypeVarKind, UnionBuilder, UnionType, binding_type,
+    todo_type,
 };
 use crate::unpack::{EvaluationMode, Unpack, UnpackPosition};
 use crate::util::diagnostics::format_enumeration;
@@ -1433,6 +1433,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         ));
                     }
                 }
+            }
+
+            if let Some(protocol) = class.into_protocol_class(self.db()) {
+                protocol.validate_members(&self.context, self.index);
             }
         }
     }
@@ -3466,7 +3470,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             &name.id,
             Some(definition),
             bound_or_constraint,
-            TypeVarVariance::Invariant, // TODO: infer this
+            None,
             default.as_deref().map(|_| TypeVarDefaultEvaluation::Lazy),
             TypeVarKind::Pep695,
         )));
@@ -4676,20 +4680,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         // Handle various singletons.
-        if let Type::NominalInstance(instance) = declared.inner_type() {
-            if instance
-                .class(self.db())
-                .is_known(self.db(), KnownClass::SpecialForm)
+        if let Some(name_expr) = target.as_name_expr() {
+            if let Some(special_form) =
+                SpecialFormType::try_from_file_and_name(self.db(), self.file(), &name_expr.id)
             {
-                if let Some(name_expr) = target.as_name_expr() {
-                    if let Some(special_form) = SpecialFormType::try_from_file_and_name(
-                        self.db(),
-                        self.file(),
-                        &name_expr.id,
-                    ) {
-                        declared.inner = Type::SpecialForm(special_form);
-                    }
-                }
+                declared.inner = Type::SpecialForm(special_form);
             }
         }
 
@@ -10045,6 +10040,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // =================================================================================
             // Branches where we probably should emit diagnostics in some context, but don't yet
             // =================================================================================
+            // TODO: When this case is implemented and the `todo!` usage
+            // is removed, consider adding `todo = "warn"` to the Clippy
+            // lint configuration in `Cargo.toml`. At time of writing,
+            // 2025-08-22, this was the only usage of `todo!` in ruff/ty.
+            // ---AG
             ast::Expr::IpyEscapeCommand(_) => todo!("Implement Ipy escape command support"),
 
             ast::Expr::EllipsisLiteral(_) => {
@@ -10598,6 +10598,54 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     self.store_expression_type(arguments_slice, ty);
                 }
                 ty
+            }
+            SpecialFormType::Top => {
+                let arguments = if let ast::Expr::Tuple(tuple) = arguments_slice {
+                    &*tuple.elts
+                } else {
+                    std::slice::from_ref(arguments_slice)
+                };
+                let num_arguments = arguments.len();
+                let arg = if num_arguments == 1 {
+                    self.infer_type_expression(&arguments[0])
+                } else {
+                    for argument in arguments {
+                        self.infer_type_expression(argument);
+                    }
+                    report_invalid_argument_number_to_special_form(
+                        &self.context,
+                        subscript,
+                        special_form,
+                        num_arguments,
+                        1,
+                    );
+                    Type::unknown()
+                };
+                arg.top_materialization(db)
+            }
+            SpecialFormType::Bottom => {
+                let arguments = if let ast::Expr::Tuple(tuple) = arguments_slice {
+                    &*tuple.elts
+                } else {
+                    std::slice::from_ref(arguments_slice)
+                };
+                let num_arguments = arguments.len();
+                let arg = if num_arguments == 1 {
+                    self.infer_type_expression(&arguments[0])
+                } else {
+                    for argument in arguments {
+                        self.infer_type_expression(argument);
+                    }
+                    report_invalid_argument_number_to_special_form(
+                        &self.context,
+                        subscript,
+                        special_form,
+                        num_arguments,
+                        1,
+                    );
+                    Type::unknown()
+                };
+                arg.bottom_materialization(db)
             }
             SpecialFormType::TypeOf => {
                 let arguments = if let ast::Expr::Tuple(tuple) = arguments_slice {

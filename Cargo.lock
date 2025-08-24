@@ -2803,7 +2803,7 @@ dependencies = [
 
 [[package]]
 name = "ruff"
-version = "0.12.9"
+version = "0.12.10"
 dependencies = [
  "anyhow",
  "argfile",
@@ -2946,6 +2946,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "similar",
  "tempfile",
  "thiserror 2.0.12",
  "tracing",
@@ -2994,6 +2995,7 @@ dependencies = [
  "tracing-subscriber",
  "ty",
  "ty_project",
+ "ty_python_semantic",
  "ty_static",
  "url",
 ]
@@ -3056,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "ruff_linter"
-version = "0.12.9"
+version = "0.12.10"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3395,7 +3397,7 @@ dependencies = [
 
 [[package]]
 name = "ruff_wasm"
-version = "0.12.9"
+version = "0.12.10"
 dependencies = [
  "console_error_panic_hook",
  "console_log",
@@ -3510,7 +3512,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 [[package]]
 name = "salsa"
 version = "0.23.0"
-source = "git+https://github.com/salsa-rs/salsa.git?rev=918d35d873b2b73a0237536144ef4d22e8d57f27#918d35d873b2b73a0237536144ef4d22e8d57f27"
+source = "git+https://github.com/salsa-rs/salsa.git?rev=a3ffa22cb26756473d56f867aedec3fd907c4dd9#a3ffa22cb26756473d56f867aedec3fd907c4dd9"
 dependencies = [
  "boxcar",
  "compact_str",
@@ -3534,12 +3536,12 @@ dependencies = [
 [[package]]
 name = "salsa-macro-rules"
 version = "0.23.0"
-source = "git+https://github.com/salsa-rs/salsa.git?rev=918d35d873b2b73a0237536144ef4d22e8d57f27#918d35d873b2b73a0237536144ef4d22e8d57f27"
+source = "git+https://github.com/salsa-rs/salsa.git?rev=a3ffa22cb26756473d56f867aedec3fd907c4dd9#a3ffa22cb26756473d56f867aedec3fd907c4dd9"
 
 [[package]]
 name = "salsa-macros"
 version = "0.23.0"
-source = "git+https://github.com/salsa-rs/salsa.git?rev=918d35d873b2b73a0237536144ef4d22e8d57f27#918d35d873b2b73a0237536144ef4d22e8d57f27"
+source = "git+https://github.com/salsa-rs/salsa.git?rev=a3ffa22cb26756473d56f867aedec3fd907c4dd9#a3ffa22cb26756473d56f867aedec3fd907c4dd9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4299,16 +4301,21 @@ name = "ty_ide"
 version = "0.0.0"
 dependencies = [
  "bitflags 2.9.2",
+ "get-size2",
  "insta",
  "itertools 0.14.0",
+ "rayon",
  "regex",
  "ruff_db",
+ "ruff_index",
+ "ruff_memory_usage",
  "ruff_python_ast",
  "ruff_python_parser",
  "ruff_python_trivia",
  "ruff_source_file",
  "ruff_text_size",
  "rustc-hash",
+ "salsa",
  "smallvec",
  "tracing",
  "ty_project",
