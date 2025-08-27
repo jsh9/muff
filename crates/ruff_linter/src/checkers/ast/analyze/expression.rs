@@ -660,6 +660,9 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
             if checker.is_rule_enabled(Rule::BlockingHttpCallInAsyncFunction) {
                 flake8_async::rules::blocking_http_call(checker, call);
             }
+            if checker.is_rule_enabled(Rule::BlockingHttpCallHttpxInAsyncFunction) {
+                flake8_async::rules::blocking_http_call_httpx(checker, call);
+            }
             if checker.is_rule_enabled(Rule::BlockingOpenCallInAsyncFunction) {
                 flake8_async::rules::blocking_open_call(checker, call);
             }
@@ -1046,7 +1049,6 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
                 Rule::PyPath,
                 Rule::Glob,
                 Rule::OsListdir,
-                Rule::OsSymlink,
             ]) {
                 flake8_use_pathlib::rules::replaceable_by_pathlib(checker, call);
             }
