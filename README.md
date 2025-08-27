@@ -36,6 +36,20 @@ Currently (August 2025) there is [a 1.8-year-old open issue(https://github.com/a
 
 If/when that issue gets implemented and merged, I will deprecate this fork.
 
+### How to use `muff`
+
+Via command line:
+```bash
+muff format --line-length 79 --config "format.quote-style='single'" --config "format.docstring-code-format=true" <FILE_PATH>
+```
+
+Via config file:
+```bash
+muff format --config=muff.toml <FILE_PATH>
+```
+Note: `muff` will try to find `ruff.toml` (rather than `muff.toml`)
+if you don't specify the config file.
+
 -----------------
 ## Below is the original README of Ruff:
 
