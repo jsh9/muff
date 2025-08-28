@@ -141,6 +141,28 @@ if ! command -v cargo &> /dev/null; then
     fi
 fi
 
+# Check Docker
+if ! command -v docker &> /dev/null; then
+    if ! install_package "docker.io" "Docker (for manylinux builds)"; then
+        exit 1
+    fi
+    
+    # Add current user to docker group
+    echo "📦 Adding current user to docker group..."
+    sudo usermod -aG docker "$USER"
+    echo "⚠️  You may need to log out and back in for Docker group membership to take effect"
+    echo "⚠️  For now, we'll use sudo with Docker commands"
+fi
+
+# Check if Docker daemon is running
+if ! sudo docker info &> /dev/null; then
+    echo "📦 Starting Docker daemon..."
+    sudo systemctl start docker || {
+        echo "❌ Failed to start Docker daemon"
+        exit 1
+    }
+fi
+
 # Check pip
 if ! command -v pip3 &> /dev/null && ! command -v pip &> /dev/null; then
     if ! install_package "python3-pip" "pip (Python package installer)"; then
@@ -260,28 +282,39 @@ echo "   ✅ git (version control)"
 echo "   ✅ libssl-dev & pkg-config (for Rust builds)"
 echo "   ✅ python3, python3-pip, python3-venv (version-specific)"
 echo "   ✅ Rust/Cargo toolchain"
+echo "   ✅ Docker (for manylinux builds)"
 echo "   ✅ maturin (Python wheel builder)"
 echo "   ✅ Virtual environment with auto-fix for version-specific packages"
 
-# Detect current architecture
+# Detect current architecture and set up manylinux containers
 CURRENT_ARCH=$(uname -m)
 if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
     NATIVE_TARGET="x86_64-unknown-linux-gnu"
     PLATFORM_NAME="x86_64 (Intel/AMD)"
-    # Build both native and more compatible targets for x86_64
     BUILD_TARGETS=("x86_64-unknown-linux-gnu")
+    # Use the same images that maturin-action uses with manylinux: auto
+    MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_17_x86_64"
 elif [[ "$CURRENT_ARCH" == "aarch64" ]]; then
     NATIVE_TARGET="aarch64-unknown-linux-gnu"
     PLATFORM_NAME="aarch64 (ARM64)"
     BUILD_TARGETS=("aarch64-unknown-linux-gnu")
+    MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_17_aarch64"
 else
     echo "❌ Unsupported architecture: $CURRENT_ARCH"
     exit 1
 fi
 
 echo "🏗️  Detected platform: Linux $PLATFORM_NAME"
-echo "📋 Native target: $NATIVE_TARGET"
+echo "📋 Native target: $NATIVE_TARGET" 
 echo "📋 Will build targets: ${BUILD_TARGETS[*]}"
+echo "📋 Manylinux image: $MANYLINUX_IMAGE"
+
+# Pull manylinux Docker image
+echo "🐳 Pulling manylinux Docker image..."
+if ! sudo docker pull "$MANYLINUX_IMAGE"; then
+    echo "❌ Failed to pull manylinux image: $MANYLINUX_IMAGE"
+    exit 1
+fi
 
 # Install Rust targets
 echo "🎯 Installing Rust targets..."
@@ -299,26 +332,39 @@ rm -f muff-*-unknown-linux-gnu.tar.gz*
 echo "📝 Preparing README.md for PyPI..."
 python3 release/transform_readme_temp.py --action create
 
-# Build function
+# Build function using Docker manylinux containers
 build_target() {
     local target=$1
     echo ""
     echo "🏗️  Building for $target..."
     
-    # Build with maturin - use manylinux for better compatibility
-    echo "🛠️  Building wheel for $target..."
-    if maturin build --release --locked --target "$target" --out dist --compatibility manylinux_2_17; then
-        echo "✅ Wheel built successfully for $target"
-    else
-        echo "⚠️  Wheel build with manylinux_2_17 failed, trying default..."
-        if maturin build --release --locked --target "$target" --out dist; then
-            echo "✅ Wheel built successfully for $target (default compatibility)"
-        else
-            echo "⚠️  Wheel build failed for $target"
-        fi
-    fi
+    # Get current working directory for mounting
+    local repo_path="$(pwd)"
     
-    # Build binary with cargo
+    # Build with maturin in Docker container
+    echo "🐳 Building wheel for $target using $MANYLINUX_IMAGE..."
+    if ! sudo docker run --rm \
+        -v "$repo_path:/io" \
+        -w /io \
+        "$MANYLINUX_IMAGE" \
+        bash -c "
+            # Install Rust in container
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source ~/.cargo/env
+            rustup target add $target
+            
+            # Install Python and maturin
+            /opt/python/cp313-cp313/bin/python -m pip install maturin
+            
+            # Build the wheel
+            /opt/python/cp313-cp313/bin/python -m maturin build --release --locked --target $target --out dist --compatibility manylinux_2_17
+        "; then
+        echo "❌ Wheel build failed for $target"
+        return 1
+    fi
+    echo "✅ Wheel built successfully for $target (manylinux_2_17)"
+    
+    # Build binary with cargo (on host system for simplicity)
     echo "🔧 Building binary for $target..."
     if cargo build --release --locked --target "$target"; then
         echo "✅ Binary built successfully for $target"
@@ -430,7 +476,8 @@ echo ""
 echo "💡 Notes:"
 echo "   - ✅ Fresh Ubuntu machine ready! All prerequisites auto-installed with consent"
 echo "   - ✅ Native build for $NATIVE_TARGET with manylinux_2_17 compatibility"
-echo "   - ✅ Wheels built with manylinux_2_17 for better GitLab CI/CD compatibility"
+echo "   - ✅ Wheels built using Docker manylinux containers for true compatibility"
+echo "   - ✅ Docker image used: $MANYLINUX_IMAGE"
 echo "   - ✅ For ARM64 builds, run this script on an ARM64 Linux machine"
 echo "   - ✅ Build environment isolated in virtual environment: $VENV_DIR"
 echo "   - ✅ Test binaries on target systems before releasing"
