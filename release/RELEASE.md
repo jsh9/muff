@@ -18,16 +18,8 @@ The Linux script automatically installs:
 - python3, python3-pip, python3-venv
 - rustc/cargo (via rustup)
 
-### 1.3 Windows (Multiple options)
-
-#### 1.3.1 WSL (Recommended)
-- Install: `wsl --install -d Ubuntu`
-- Prerequisites auto-installed like Linux
-
-#### 1.3.2 Git Bash
-- Install Git for Windows
-- Install Python: `winget install Python.Python.3`
-- Install Rust: `winget install Rustlang.Rustup`
+### 1.3 Windows
+See detailed Windows instructions in [WINDOWS.md](WINDOWS.md)
 
 ### 1.4 Authentication
 ```bash
@@ -54,10 +46,7 @@ Run on native Linux machine (x86_64 or ARM64).
 - x86_64 builds produce `manylinux_2_17_x86_64` wheels instead of `manylinux_2_39_x86_64`
 
 #### 2.1.3 Windows
-```bash
-./release/step-1-build-windows.sh
-```
-Run on Windows with WSL, Git Bash, or MSYS2.
+See [WINDOWS.md](WINDOWS.md) for detailed Windows build instructions.
 
 ### 2.2 Release Scripts
 
@@ -95,8 +84,8 @@ Build on each platform, then combine artifacts:
 # On Linux
 ./release/step-1-build-linux.sh
 
-# On Windows
-./release/step-1-build-windows.sh
+# On Windows (see WINDOWS.md for details)
+./release/step-1-build-windows-simple.ps1
 
 # Combine artifacts and release
 ./release/step-2-create-release.sh v1.0.0
@@ -127,7 +116,7 @@ Set `PYPI_API_TOKEN` environment variable or use trusted publishing from GitHub 
 
 ### 6.3 Platform Issues
 - **Linux**: Scripts handle missing dependencies automatically
-- **Windows**: Use WSL for best compatibility
+- **Windows**: See [WINDOWS.md](WINDOWS.md) for troubleshooting
 - **macOS**: Scripts handle missing dependencies automatically
 
 ### 6.4 GitLab CI/CD Issues

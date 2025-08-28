@@ -10,11 +10,13 @@ Instructions for building Muff on Windows x86_64 with PowerShell.
    ```
    Or use built-in Windows PowerShell 5.1
 
-2. **Python 3**
+2. **Anaconda**
    ```powershell
-   winget install -e --id Python.Python.3.11 --scope machine
+   winget install Anaconda.Anaconda3
    ```
-   Or download from: https://python.org
+   Or download from: https://www.anaconda.com/download
+   
+   After installation, use **Anaconda PowerShell Prompt** instead of regular PowerShell for all subsequent commands.
 
 3. **Rust**
    ```powershell
@@ -29,7 +31,9 @@ Instructions for building Muff on Windows x86_64 with PowerShell.
 
 ## Build Process
 
-1. **Open PowerShell** as Administrator (recommended)
+1. **Open Anaconda PowerShell Prompt** as Administrator (recommended)
+   - Search for "Anaconda PowerShell Prompt" in Windows Start menu
+   - Right-click and select "Run as administrator"
 
 2. **Navigate to project directory**
    ```powershell
@@ -43,7 +47,7 @@ Instructions for building Muff on Windows x86_64 with PowerShell.
 
 ## What the script does
 
-1. Installs Python virtual environment and maturin
+1. Uses Anaconda's Python environment and installs maturin
 2. Adds Windows Rust targets (MSVC preferred, GNU fallback)
 3. Builds Python wheels and standalone binaries
 4. Creates zip archives with checksums
@@ -58,10 +62,11 @@ After successful build:
 
 ## Troubleshooting
 
-- **Missing Python**: Install from python.org or use winget
+- **Missing Anaconda**: Install from anaconda.com or use winget
+- **Python environment issues**: Ensure you're using Anaconda PowerShell Prompt, not regular PowerShell
 - **Missing Rust**: Install from rustup.rs or use winget
 - **MSVC build fails**: Install Visual Studio Build Tools, or script will fallback to GNU target
-- **Permission errors**: Run PowerShell as Administrator
+- **Permission errors**: Run Anaconda PowerShell Prompt as Administrator
 - **Execution policy**: Run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ## Next Steps
