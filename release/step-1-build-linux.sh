@@ -328,6 +328,10 @@ rm -rf dist/
 rm -rf target/*/release/
 rm -f muff-*-unknown-linux-gnu.tar.gz*
 
+# Create dist directory with proper permissions
+mkdir -p dist
+chmod 777 dist
+
 # Prep README.md for PyPI (create temporary copy to avoid git diff)
 echo "📝 Preparing README.md for PyPI..."
 python3 release/transform_readme_temp.py --action create
@@ -346,15 +350,17 @@ build_target() {
     if ! sudo docker run --rm \
         -v "$repo_path:/io" \
         -w /io \
+        -u "$(id -u):$(id -g)" \
+        -e HOME=/tmp \
         "$MANYLINUX_IMAGE" \
         bash -c "
             # Install Rust in container
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source ~/.cargo/env
+            source /tmp/.cargo/env
             rustup target add $target
             
             # Install Python and maturin
-            /opt/python/cp313-cp313/bin/python -m pip install maturin
+            /opt/python/cp313-cp313/bin/python -m pip install --user maturin
             
             # Build the wheel
             /opt/python/cp313-cp313/bin/python -m maturin build --release --locked --target $target --out dist --compatibility manylinux_2_17
