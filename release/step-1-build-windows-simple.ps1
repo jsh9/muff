@@ -40,8 +40,56 @@ Write-Host "Activating virtual environment..." -ForegroundColor Yellow
 Write-Host "Installing maturin..." -ForegroundColor Yellow
 pip install --upgrade pip maturin
 
-# Set Windows targets (prefer MSVC, fallback to GNU)
-$TARGETS = @("x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu")
+# Check for Visual Studio Build Tools and set targets accordingly
+Write-Host "Checking for Visual Studio Build Tools..." -ForegroundColor Cyan
+$hasMSVC = $false
+try {
+    $null = Get-Command "cl.exe" -ErrorAction Stop
+    $hasMSVC = $true
+    Write-Host "Found Visual Studio Build Tools (MSVC available)" -ForegroundColor Green
+} catch {
+    Write-Host "Visual Studio Build Tools not found in PATH" -ForegroundColor Yellow
+    Write-Host "HINT: Install from https://visualstudio.microsoft.com/downloads/" -ForegroundColor Yellow
+    Write-Host "Will use GNU target only" -ForegroundColor Yellow
+}
+
+# Set Windows targets based on available toolchain
+if ($hasMSVC) {
+    $TARGETS = @("x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu")
+    Write-Host "Targets: MSVC (preferred) + GNU (fallback)" -ForegroundColor Green
+} else {
+    $TARGETS = @("x86_64-pc-windows-gnu")
+    Write-Host "Targets: GNU only (MSVC not available)" -ForegroundColor Yellow
+    # Force GNU toolchain when MSVC not available
+    Write-Host "Setting GNU toolchain environment..." -ForegroundColor Yellow
+    $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc"
+    $env:CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc"
+    $env:CXX_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-g++"
+}
+
+# Install required toolchain for GNU target if MSVC not available
+if (!$hasMSVC) {
+    Write-Host "Installing MinGW-w64 toolchain..." -ForegroundColor Cyan
+    try {
+        # Try to install via scoop (common package manager)
+        if (Get-Command "scoop" -ErrorAction SilentlyContinue) {
+            scoop install mingw
+        } elseif (Get-Command "choco" -ErrorAction SilentlyContinue) {
+            # Try chocolatey
+            choco install mingw -y
+        } else {
+            Write-Host "Please install MinGW-w64 manually:" -ForegroundColor Red
+            Write-Host "  Option 1: Install MSYS2: winget install MSYS2.MSYS2" -ForegroundColor Yellow
+            Write-Host "  Option 2: Download from: https://www.mingw-w64.org/downloads/" -ForegroundColor Yellow
+            Write-Host "  Then add the bin directory to your PATH" -ForegroundColor Yellow
+            exit 1
+        }
+    } catch {
+        Write-Host "Failed to install MinGW-w64 automatically" -ForegroundColor Red
+        Write-Host "Please install manually and ensure gcc is in PATH" -ForegroundColor Yellow
+        exit 1
+    }
+}
 
 # Install Rust targets
 Write-Host "Installing Rust targets..." -ForegroundColor Cyan
