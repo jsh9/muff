@@ -292,13 +292,13 @@ if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
     NATIVE_TARGET="x86_64-unknown-linux-gnu"
     PLATFORM_NAME="x86_64 (Intel/AMD)"
     BUILD_TARGETS=("x86_64-unknown-linux-gnu")
-    # Use the same images that maturin-action uses with manylinux: auto
-    MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_17_x86_64"
+    # Use the standard manylinux2014 images (manylinux_2_17 compatible)
+    MANYLINUX_IMAGE="quay.io/pypa/manylinux2014_x86_64"
 elif [[ "$CURRENT_ARCH" == "aarch64" ]]; then
     NATIVE_TARGET="aarch64-unknown-linux-gnu"
     PLATFORM_NAME="aarch64 (ARM64)"
     BUILD_TARGETS=("aarch64-unknown-linux-gnu")
-    MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_17_aarch64"
+    MANYLINUX_IMAGE="quay.io/pypa/manylinux2014_aarch64"
 else
     echo "❌ Unsupported architecture: $CURRENT_ARCH"
     exit 1
