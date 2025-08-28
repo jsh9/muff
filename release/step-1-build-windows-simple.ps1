@@ -126,6 +126,10 @@ if (!$hasMSVC) {
     }
     
     Write-Host "MinGW-w64 toolchain ready" -ForegroundColor Green
+    
+    # Set default Rust toolchain to GNU
+    Write-Host "Setting default Rust target to GNU..." -ForegroundColor Yellow
+    rustup default stable-x86_64-pc-windows-gnu
 }
 
 # Install Rust targets
@@ -158,6 +162,9 @@ function Build-Target {
     
     # Build wheel
     try {
+        if ($Target -eq "x86_64-pc-windows-gnu") {
+            $env:CARGO_BUILD_TARGET = $Target
+        }
         maturin build --release --locked --target $Target --out dist
         Write-Host "SUCCESS: Wheel built for $Target" -ForegroundColor Green
     }
@@ -168,6 +175,9 @@ function Build-Target {
     
     # Build binary
     try {
+        if ($Target -eq "x86_64-pc-windows-gnu") {
+            $env:CARGO_BUILD_TARGET = $Target
+        }
         cargo build --release --locked --target $Target
         Write-Host "SUCCESS: Binary built for $Target" -ForegroundColor Green
         
