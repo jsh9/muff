@@ -70,25 +70,57 @@ if ($hasMSVC) {
 # Install required toolchain for GNU target if MSVC not available
 if (!$hasMSVC) {
     Write-Host "Installing MinGW-w64 toolchain..." -ForegroundColor Cyan
-    try {
-        # Try to install via scoop (common package manager)
-        if (Get-Command "scoop" -ErrorAction SilentlyContinue) {
-            scoop install mingw
-        } elseif (Get-Command "choco" -ErrorAction SilentlyContinue) {
-            # Try chocolatey
-            choco install mingw -y
-        } else {
-            Write-Host "Please install MinGW-w64 manually:" -ForegroundColor Red
-            Write-Host "  Option 1: Install MSYS2: winget install MSYS2.MSYS2" -ForegroundColor Yellow
-            Write-Host "  Option 2: Download from: https://www.mingw-w64.org/downloads/" -ForegroundColor Yellow
-            Write-Host "  Then add the bin directory to your PATH" -ForegroundColor Yellow
-            exit 1
+    
+    # Check for common MinGW installations and add to PATH
+    $mingwPaths = @(
+        "C:\msys64\mingw64\bin",
+        "C:\msys64\ucrt64\bin", 
+        "C:\mingw64\bin",
+        "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin"
+    )
+    
+    $mingwFound = $false
+    foreach ($path in $mingwPaths) {
+        if (Test-Path "$path\gcc.exe") {
+            Write-Host "Found MinGW at: $path" -ForegroundColor Green
+            $env:PATH = "$path;$env:PATH"
+            $mingwFound = $true
+            break
         }
-    } catch {
-        Write-Host "Failed to install MinGW-w64 automatically" -ForegroundColor Red
-        Write-Host "Please install manually and ensure gcc is in PATH" -ForegroundColor Yellow
+    }
+    
+    if (!$mingwFound) {
+        try {
+            # Try to install via package managers
+            if (Get-Command "scoop" -ErrorAction SilentlyContinue) {
+                Write-Host "Installing MinGW via scoop..." -ForegroundColor Yellow
+                scoop install mingw
+                $env:PATH = "$env:USERPROFILE\scoop\apps\mingw\current\bin;$env:PATH"
+            } elseif (Get-Command "choco" -ErrorAction SilentlyContinue) {
+                Write-Host "Installing MinGW via chocolatey..." -ForegroundColor Yellow
+                choco install mingw -y
+                $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
+            } else {
+                Write-Host "Installing MSYS2 via winget..." -ForegroundColor Yellow
+                winget install MSYS2.MSYS2 --silent
+                Start-Sleep -Seconds 5
+                $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+            }
+            $mingwFound = $true
+        } catch {
+            Write-Host "Automatic installation failed" -ForegroundColor Red
+        }
+    }
+    
+    if (!$mingwFound -or !(Get-Command "gcc" -ErrorAction SilentlyContinue)) {
+        Write-Host "ERROR: MinGW-w64 not found or not working" -ForegroundColor Red
+        Write-Host "Please install MSYS2 manually:" -ForegroundColor Yellow
+        Write-Host "  1. Run: winget install MSYS2.MSYS2" -ForegroundColor Yellow
+        Write-Host "  2. Then run this script again" -ForegroundColor Yellow
         exit 1
     }
+    
+    Write-Host "MinGW-w64 toolchain ready" -ForegroundColor Green
 }
 
 # Install Rust targets
