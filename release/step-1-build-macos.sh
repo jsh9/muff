@@ -69,6 +69,10 @@ rm -rf target/aarch64-apple-darwin/release/
 rm -rf target/x86_64-apple-darwin/release/
 rm -f muff-*-apple-darwin.tar.gz*
 
+# Build general release first
+echo "🔧 Building general release..."
+cargo build --release
+
 # Prep README.md for PyPI (create temporary copy to avoid git diff)
 echo "📝 Preparing README.md for PyPI..."
 python release/transform_readme_temp.py --action create

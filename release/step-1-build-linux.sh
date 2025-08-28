@@ -268,9 +268,12 @@ CURRENT_ARCH=$(uname -m)
 if [[ "$CURRENT_ARCH" == "x86_64" ]]; then
     NATIVE_TARGET="x86_64-unknown-linux-gnu"
     PLATFORM_NAME="x86_64 (Intel/AMD)"
+    # Build both native and more compatible targets for x86_64
+    BUILD_TARGETS=("x86_64-unknown-linux-gnu")
 elif [[ "$CURRENT_ARCH" == "aarch64" ]]; then
     NATIVE_TARGET="aarch64-unknown-linux-gnu"
     PLATFORM_NAME="aarch64 (ARM64)"
+    BUILD_TARGETS=("aarch64-unknown-linux-gnu")
 else
     echo "❌ Unsupported architecture: $CURRENT_ARCH"
     exit 1
@@ -278,10 +281,13 @@ fi
 
 echo "🏗️  Detected platform: Linux $PLATFORM_NAME"
 echo "📋 Native target: $NATIVE_TARGET"
+echo "📋 Will build targets: ${BUILD_TARGETS[*]}"
 
-# Install Rust target
-echo "🎯 Installing Rust target..."
-rustup target add "$NATIVE_TARGET"
+# Install Rust targets
+echo "🎯 Installing Rust targets..."
+for target in "${BUILD_TARGETS[@]}"; do
+    rustup target add "$target"
+done
 
 # Clean previous builds
 echo "🧹 Cleaning previous builds..."
@@ -299,12 +305,17 @@ build_target() {
     echo ""
     echo "🏗️  Building for $target..."
     
-    # Build with maturin
+    # Build with maturin - use manylinux for better compatibility
     echo "🛠️  Building wheel for $target..."
-    if maturin build --release --locked --target "$target" --out dist; then
+    if maturin build --release --locked --target "$target" --out dist --compatibility manylinux_2_17; then
         echo "✅ Wheel built successfully for $target"
     else
-        echo "⚠️  Wheel build failed for $target"
+        echo "⚠️  Wheel build with manylinux_2_17 failed, trying default..."
+        if maturin build --release --locked --target "$target" --out dist; then
+            echo "✅ Wheel built successfully for $target (default compatibility)"
+        else
+            echo "⚠️  Wheel build failed for $target"
+        fi
     fi
     
     # Build binary with cargo
@@ -334,11 +345,18 @@ build_target() {
     fi
 }
 
-# Build for native target only
+# Build for all targets
 success=true
-if ! build_target "$NATIVE_TARGET"; then
-    success=false
-fi
+for target in "${BUILD_TARGETS[@]}"; do
+    echo ""
+    echo "🚀 Building target: $target"
+    if ! build_target "$target"; then
+        success=false
+        echo "❌ Failed to build target: $target"
+    else
+        echo "✅ Successfully built target: $target"
+    fi
+done
 
 # Build source distribution
 echo ""
@@ -350,10 +368,18 @@ echo ""
 echo "🧪 Testing Linux builds..."
 
 # Find compatible wheel for current architecture
-if ls dist/*-*-linux_${CURRENT_ARCH}.whl 1> /dev/null 2>&1; then
-    echo "🔍 Found compatible wheel for testing..."
-    
-    WHEEL_FILE=$(ls dist/*-*-linux_${CURRENT_ARCH}.whl | head -1)
+WHEEL_PATTERNS=("*-*-linux_${CURRENT_ARCH}.whl" "*-*-manylinux*${CURRENT_ARCH}.whl")
+WHEEL_FILE=""
+
+for pattern in "${WHEEL_PATTERNS[@]}"; do
+    if ls dist/${pattern} 1> /dev/null 2>&1; then
+        WHEEL_FILE=$(ls dist/${pattern} | head -1)
+        break
+    fi
+done
+
+if [[ -n "$WHEEL_FILE" ]]; then
+    echo "🔍 Found compatible wheel for testing: $(basename "$WHEEL_FILE")"
     
     # Install and test in the build virtual environment
     echo "Installing wheel in virtual environment for testing..."
@@ -373,6 +399,7 @@ else
     echo "⚠️  No compatible wheel found for testing"
     echo "    Available wheels:"
     ls dist/*.whl 2>/dev/null | sed 's/^/      /' || echo "      (No wheels found)"
+    echo "    Looked for patterns: ${WHEEL_PATTERNS[*]}"
 fi
 
 echo ""
@@ -391,16 +418,19 @@ ls -la muff-*-unknown-linux-gnu.tar.gz 2>/dev/null || echo "     (No binary arch
 
 echo ""
 echo "🎯 Built targets:"
-if [[ -f "target/$NATIVE_TARGET/release/muff" ]]; then
-    echo "   ✅ $NATIVE_TARGET"
-else
-    echo "   ❌ $NATIVE_TARGET (failed)"
-fi
+for target in "${BUILD_TARGETS[@]}"; do
+    if [[ -f "target/$target/release/muff" ]]; then
+        echo "   ✅ $target"
+    else
+        echo "   ❌ $target (failed)"
+    fi
+done
 
 echo ""
 echo "💡 Notes:"
 echo "   - ✅ Fresh Ubuntu machine ready! All prerequisites auto-installed with consent"
-echo "   - ✅ Native build for $NATIVE_TARGET only (no cross-compilation)"
+echo "   - ✅ Native build for $NATIVE_TARGET with manylinux_2_17 compatibility"
+echo "   - ✅ Wheels built with manylinux_2_17 for better GitLab CI/CD compatibility"
 echo "   - ✅ For ARM64 builds, run this script on an ARM64 Linux machine"
 echo "   - ✅ Build environment isolated in virtual environment: $VENV_DIR"
 echo "   - ✅ Test binaries on target systems before releasing"

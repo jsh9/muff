@@ -50,6 +50,8 @@ Builds for both Intel and Apple Silicon.
 ./release/step-1-build-linux.sh
 ```
 Run on native Linux machine (x86_64 or ARM64).
+- Builds manylinux_2_17 compatible wheels for better GitLab CI/CD compatibility
+- x86_64 builds produce `manylinux_2_17_x86_64` wheels instead of `manylinux_2_39_x86_64`
 
 #### 2.1.3 Windows
 ```bash
@@ -127,3 +129,10 @@ Set `PYPI_API_TOKEN` environment variable or use trusted publishing from GitHub 
 - **Linux**: Scripts handle missing dependencies automatically
 - **Windows**: Use WSL for best compatibility
 - **macOS**: Scripts handle missing dependencies automatically
+
+### 6.4 GitLab CI/CD Issues
+If GitLab runners build from source instead of using pre-built wheels:
+- Ensure you're building with `manylinux_2_17` compatibility (automatically handled by updated script)
+- x86_64 builds now produce `manylinux_2_17_x86_64.whl` instead of `manylinux_2_39_x86_64.whl`
+- GitLab runners use standard x86_64 architecture and expect broader compatibility
+- Re-run `./release/step-1-build-linux.sh` on x86_64 Ubuntu to generate compatible wheels
