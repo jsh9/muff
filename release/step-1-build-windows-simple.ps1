@@ -62,9 +62,9 @@ if ($hasMSVC) {
     Write-Host "Targets: GNU only (MSVC not available)" -ForegroundColor Yellow
     # Force GNU toolchain when MSVC not available
     Write-Host "Setting GNU toolchain environment..." -ForegroundColor Yellow
-    $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc"
-    $env:CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc"
-    $env:CXX_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-g++"
+    $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "gcc"
+    $env:CC_x86_64_pc_windows_gnu = "gcc"
+    $env:CXX_x86_64_pc_windows_gnu = "g++"
 }
 
 # Install required toolchain for GNU target if MSVC not available
@@ -104,6 +104,11 @@ if (!$hasMSVC) {
                 Write-Host "Installing MSYS2 via winget..." -ForegroundColor Yellow
                 winget install MSYS2.MSYS2 --silent
                 Start-Sleep -Seconds 5
+                
+                # Install mingw-w64 toolchain in MSYS2
+                Write-Host "Installing mingw-w64 toolchain in MSYS2..." -ForegroundColor Yellow
+                & "C:\msys64\usr\bin\pacman.exe" -S --noconfirm mingw-w64-x86_64-toolchain
+                
                 $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
             }
             $mingwFound = $true
