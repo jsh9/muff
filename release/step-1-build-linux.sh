@@ -325,7 +325,11 @@ done
 # Clean previous builds
 echo "🧹 Cleaning previous builds..."
 rm -rf dist/
-rm -rf target/*/release/
+# Use Docker to clean target directory if it has permission issues
+if [[ -d target/ ]] && ! rm -rf target/ 2>/dev/null; then
+    echo "🐳 Using Docker to clean target directory (permission issues)..."
+    sudo docker run --rm -v "$(pwd):/io" -w /io alpine:latest rm -rf target/
+fi
 rm -f muff-*-unknown-linux-gnu.tar.gz*
 
 # Create dist directory with proper permissions
@@ -492,3 +496,7 @@ echo "   - ✅ Test binaries on target systems before releasing"
 echo ""
 echo "🔄 Cleaning up temporary files..."
 python3 release/transform_readme_temp.py --action cleanup
+
+# Fix ownership of any Docker-created files
+echo "🔧 Fixing ownership of Docker-created files..."
+sudo chown -R "$(id -u):$(id -g)" target/ dist/ 2>/dev/null || true
