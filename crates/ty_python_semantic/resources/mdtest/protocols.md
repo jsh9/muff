@@ -1704,7 +1704,11 @@ class NotSubtype:
     def m(self, x: int) -> int:
         return 42
 
+class DefinitelyNotSubtype:
+    m = None
+
 static_assert(is_subtype_of(NominalSubtype, P))
+static_assert(not is_subtype_of(DefinitelyNotSubtype, P))
 
 # TODO: should pass
 static_assert(not is_subtype_of(NotSubtype, P))  # error: [static-assert-error]
@@ -2337,6 +2341,28 @@ class Bar(Protocol[S]):
     def x(self) -> "S | Bar[S]": ...
 
 z: S | Bar[S]
+```
+
+### Recursive legacy generic protocol
+
+```py
+from typing import Generic, TypeVar, Protocol
+
+T = TypeVar("T")
+
+class P(Protocol[T]):
+    attr: "P[T] | T"
+
+class A(Generic[T]):
+    attr: T
+
+class B(A[P[int]]):
+    pass
+
+def f(b: B):
+    reveal_type(b)  # revealed: B
+    reveal_type(b.attr)  # revealed: P[int]
+    reveal_type(b.attr.attr)  # revealed: P[int] | int
 ```
 
 ### Recursive generic protocols with property members

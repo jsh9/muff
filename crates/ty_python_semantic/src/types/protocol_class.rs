@@ -17,10 +17,10 @@ use crate::{
     place::{Boundness, Place, PlaceAndQualifiers, place_from_bindings, place_from_declarations},
     semantic_index::{definition::Definition, use_def_map},
     types::{
-        BoundTypeVarInstance, CallableType, ClassBase, ClassLiteral, HasRelationToVisitor,
-        IsDisjointVisitor, KnownFunction, MaterializationKind, NormalizedVisitor,
-        PropertyInstanceType, Signature, Type, TypeMapping, TypeQualifiers, TypeRelation,
-        VarianceInferable,
+        ApplyTypeMappingVisitor, BoundTypeVarInstance, CallableType, ClassBase, ClassLiteral,
+        FindLegacyTypeVarsVisitor, HasRelationToVisitor, IsDisjointVisitor, KnownFunction,
+        MaterializationKind, NormalizedVisitor, PropertyInstanceType, Signature, Type, TypeMapping,
+        TypeQualifiers, TypeRelation, VarianceInferable,
         constraints::{Constraints, IteratorConstraintsExtension},
         signatures::{Parameter, Parameters},
     },
@@ -282,21 +282,27 @@ impl<'db> ProtocolInterface<'db> {
                 .map(|(name, data)| {
                     (
                         name.clone(),
-                        data.apply_type_mapping(db, type_mapping).normalized(db),
+                        data.apply_type_mapping_impl(
+                            db,
+                            type_mapping,
+                            &ApplyTypeMappingVisitor::default(),
+                        )
+                        .normalized(db),
                     )
                 })
                 .collect::<BTreeMap<_, _>>(),
         )
     }
 
-    pub(super) fn find_legacy_typevars(
+    pub(super) fn find_legacy_typevars_impl(
         self,
         db: &'db dyn Db,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         for data in self.inner(db).values() {
-            data.find_legacy_typevars(db, binding_context, typevars);
+            data.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
         }
     }
 
@@ -353,21 +359,27 @@ impl<'db> ProtocolMemberData<'db> {
         }
     }
 
-    fn apply_type_mapping<'a>(&self, db: &'db dyn Db, type_mapping: &TypeMapping<'a, 'db>) -> Self {
+    fn apply_type_mapping_impl<'a>(
+        &self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        visitor: &ApplyTypeMappingVisitor<'db>,
+    ) -> Self {
         Self {
-            kind: self.kind.apply_type_mapping(db, type_mapping),
+            kind: self.kind.apply_type_mapping_impl(db, type_mapping, visitor),
             qualifiers: self.qualifiers,
         }
     }
 
-    fn find_legacy_typevars(
+    fn find_legacy_typevars_impl(
         &self,
         db: &'db dyn Db,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         self.kind
-            .find_legacy_typevars(db, binding_context, typevars);
+            .find_legacy_typevars_impl(db, binding_context, typevars, visitor);
     }
 
     fn materialize(&self, db: &'db dyn Db, materialization_kind: MaterializationKind) -> Self {
@@ -442,32 +454,38 @@ impl<'db> ProtocolMemberKind<'db> {
         }
     }
 
-    fn apply_type_mapping<'a>(&self, db: &'db dyn Db, type_mapping: &TypeMapping<'a, 'db>) -> Self {
+    fn apply_type_mapping_impl<'a>(
+        &self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        visitor: &ApplyTypeMappingVisitor<'db>,
+    ) -> Self {
         match self {
-            ProtocolMemberKind::Method(callable) => {
-                ProtocolMemberKind::Method(callable.apply_type_mapping(db, type_mapping))
-            }
-            ProtocolMemberKind::Property(property) => {
-                ProtocolMemberKind::Property(property.apply_type_mapping(db, type_mapping))
-            }
+            ProtocolMemberKind::Method(callable) => ProtocolMemberKind::Method(
+                callable.apply_type_mapping_impl(db, type_mapping, visitor),
+            ),
+            ProtocolMemberKind::Property(property) => ProtocolMemberKind::Property(
+                property.apply_type_mapping_impl(db, type_mapping, visitor),
+            ),
             ProtocolMemberKind::Other(ty) => {
-                ProtocolMemberKind::Other(ty.apply_type_mapping(db, type_mapping))
+                ProtocolMemberKind::Other(ty.apply_type_mapping_impl(db, type_mapping, visitor))
             }
         }
     }
 
-    fn find_legacy_typevars(
+    fn find_legacy_typevars_impl(
         &self,
         db: &'db dyn Db,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         match self {
             ProtocolMemberKind::Method(callable) => {
-                callable.find_legacy_typevars(db, binding_context, typevars);
+                callable.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
             ProtocolMemberKind::Property(property) => {
-                property.find_legacy_typevars(db, binding_context, typevars);
+                property.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
             ProtocolMemberKind::Other(ty) => {
                 ty.find_legacy_typevars(db, binding_context, typevars);
@@ -557,7 +575,8 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                 db,
                 matches!(
                     other.to_meta_type(db).member(db, self.name).place,
-                    Place::Type(_, Boundness::Bound)
+                    Place::Type(ty, Boundness::Bound)
+                    if ty.is_assignable_to(db, CallableType::single(db, Signature::dynamic(Type::any())))
                 ),
             ),
             // TODO: consider the types of the attribute on `other` for property members

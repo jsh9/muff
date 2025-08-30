@@ -15,10 +15,10 @@ use crate::types::instance::{Protocol, ProtocolInstanceType};
 use crate::types::signatures::{Parameter, Parameters, Signature};
 use crate::types::tuple::{TupleSpec, TupleType, walk_tuple_type};
 use crate::types::{
-    ApplyTypeMappingVisitor, BoundTypeVarInstance, HasRelationToVisitor, IsEquivalentVisitor,
-    KnownClass, KnownInstanceType, MaterializationKind, NormalizedVisitor, Type, TypeMapping,
-    TypeRelation, TypeVarBoundOrConstraints, TypeVarInstance, TypeVarVariance, UnionType,
-    binding_type, declaration_type,
+    ApplyTypeMappingVisitor, BoundTypeVarInstance, FindLegacyTypeVarsVisitor, HasRelationToVisitor,
+    IsEquivalentVisitor, KnownClass, KnownInstanceType, MaterializationKind, NormalizedVisitor,
+    Type, TypeMapping, TypeRelation, TypeVarBoundOrConstraints, TypeVarInstance, TypeVarVariance,
+    UnionType, binding_type, declaration_type,
 };
 use crate::{Db, FxOrderSet};
 
@@ -119,13 +119,19 @@ impl<'db> GenericContext<'db> {
         binding_context: Definition<'db>,
         type_params_node: &ast::TypeParams,
     ) -> Self {
-        let variables: FxOrderSet<_> = type_params_node
-            .iter()
-            .filter_map(|type_param| {
-                Self::variable_from_type_param(db, index, binding_context, type_param)
-            })
-            .collect();
-        Self::new(db, variables)
+        let variables = type_params_node.iter().filter_map(|type_param| {
+            Self::variable_from_type_param(db, index, binding_context, type_param)
+        });
+
+        Self::from_typevar_instances(db, variables)
+    }
+
+    /// Creates a generic context from a list of `BoundTypeVarInstance`s.
+    pub(crate) fn from_typevar_instances(
+        db: &'db dyn Db,
+        type_params: impl IntoIterator<Item = BoundTypeVarInstance<'db>>,
+    ) -> Self {
+        Self::new(db, type_params.into_iter().collect::<FxOrderSet<_>>())
     }
 
     fn variable_from_type_param(
@@ -365,12 +371,12 @@ impl<'db> GenericContext<'db> {
     }
 
     pub(crate) fn normalized_impl(self, db: &'db dyn Db, visitor: &NormalizedVisitor<'db>) -> Self {
-        let variables: FxOrderSet<_> = self
+        let variables = self
             .variables(db)
             .iter()
-            .map(|bound_typevar| bound_typevar.normalized_impl(db, visitor))
-            .collect();
-        Self::new(db, variables)
+            .map(|bound_typevar| bound_typevar.normalized_impl(db, visitor));
+
+        Self::from_typevar_instances(db, variables)
     }
 
     fn heap_size((variables,): &(FxOrderSet<BoundTypeVarInstance<'db>>,)) -> usize {
@@ -581,7 +587,11 @@ impl<'db> Specialization<'db> {
     /// That lets us produce the generic alias `A[int]`, which is the corresponding entry in the
     /// MRO of `B[int]`.
     pub(crate) fn apply_specialization(self, db: &'db dyn Db, other: Specialization<'db>) -> Self {
-        self.apply_type_mapping(db, &TypeMapping::Specialization(other))
+        let new_specialization = self.apply_type_mapping(db, &TypeMapping::Specialization(other));
+        match other.materialization_kind(db) {
+            None => new_specialization,
+            Some(materialization_kind) => new_specialization.materialize(db, materialization_kind),
+        }
     }
 
     pub(crate) fn apply_type_mapping<'a>(
@@ -598,59 +608,20 @@ impl<'db> Specialization<'db> {
         type_mapping: &TypeMapping<'a, 'db>,
         visitor: &ApplyTypeMappingVisitor<'db>,
     ) -> Self {
-        // TODO it seems like this should be possible to do in a much simpler way in
-        // `Self::apply_specialization`; just apply the type mapping to create the new
-        // specialization, then materialize the new specialization appropriately, if the type
-        // mapping is a materialization. But this doesn't work; see discussion in
-        // https://github.com/astral-sh/ruff/pull/20076
-        let applied_materialization_kind = type_mapping.materialization_kind(db);
-        let mut has_dynamic_invariant_typevar = false;
         let types: Box<[_]> = self
-            .generic_context(db)
-            .variables(db)
-            .into_iter()
-            .zip(self.types(db))
-            .map(|(bound_typevar, vartype)| {
-                let ty = vartype.apply_type_mapping_impl(db, type_mapping, visitor);
-                match (applied_materialization_kind, bound_typevar.variance(db)) {
-                    (None, _) => ty,
-                    (Some(_), TypeVarVariance::Bivariant) =>
-                    // With bivariance, all specializations are subtypes of each other,
-                    // so any materialization is acceptable.
-                    {
-                        ty.materialize(db, MaterializationKind::Top)
-                    }
-                    (Some(materialization_kind), TypeVarVariance::Covariant) => {
-                        ty.materialize(db, materialization_kind)
-                    }
-                    (Some(materialization_kind), TypeVarVariance::Contravariant) => {
-                        ty.materialize(db, materialization_kind.flip())
-                    }
-                    (Some(_), TypeVarVariance::Invariant) => {
-                        let top_materialization = ty.materialize(db, MaterializationKind::Top);
-                        if !ty.is_equivalent_to(db, top_materialization) {
-                            has_dynamic_invariant_typevar = true;
-                        }
-                        ty
-                    }
-                }
-            })
+            .types(db)
+            .iter()
+            .map(|ty| ty.apply_type_mapping_impl(db, type_mapping, visitor))
             .collect();
 
         let tuple_inner = self
             .tuple_inner(db)
             .and_then(|tuple| tuple.apply_type_mapping_impl(db, type_mapping, visitor));
-        let new_materialization_kind = if has_dynamic_invariant_typevar {
-            self.materialization_kind(db)
-                .or(applied_materialization_kind)
-        } else {
-            None
-        };
         Specialization::new(
             db,
             self.generic_context(db),
             types,
-            new_materialization_kind,
+            self.materialization_kind(db),
             tuple_inner,
         )
     }
@@ -888,14 +859,15 @@ impl<'db> Specialization<'db> {
         result
     }
 
-    pub(crate) fn find_legacy_typevars(
+    pub(crate) fn find_legacy_typevars_impl(
         self,
         db: &'db dyn Db,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         for ty in self.types(db) {
-            ty.find_legacy_typevars(db, binding_context, typevars);
+            ty.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
         }
         // A tuple's specialization will include all of its element types, so we don't need to also
         // look in `self.tuple`.

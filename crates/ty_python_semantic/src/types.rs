@@ -19,7 +19,7 @@ use ruff_text_size::{Ranged, TextRange};
 use type_ordering::union_or_intersection_elements_ordering;
 
 pub(crate) use self::builder::{IntersectionBuilder, UnionBuilder};
-pub(crate) use self::cyclic::{PairVisitor, TypeTransformer};
+pub(crate) use self::cyclic::{CycleDetector, PairVisitor, TypeTransformer};
 pub use self::diagnostic::TypeCheckDiagnostics;
 pub(crate) use self::diagnostic::register_lints;
 pub(crate) use self::infer::{
@@ -39,7 +39,7 @@ use crate::suppression::check_suppressions;
 use crate::types::call::{Binding, Bindings, CallArguments, CallableBinding};
 pub(crate) use crate::types::class_base::ClassBase;
 use crate::types::constraints::{
-    Constraints, IteratorConstraintsExtension, OptionConstraintsExtension,
+    ConstraintSet, Constraints, IteratorConstraintsExtension, OptionConstraintsExtension,
 };
 use crate::types::context::{LintDiagnosticGuard, LintDiagnosticGuardBuilder};
 use crate::types::diagnostic::{INVALID_AWAIT, INVALID_TYPE_FORM, UNSUPPORTED_BOOL_CONVERSION};
@@ -190,6 +190,10 @@ pub(crate) struct IsDisjoint;
 /// A [`PairVisitor`] that is used in `is_equivalent` methods.
 pub(crate) type IsEquivalentVisitor<'db, C> = PairVisitor<'db, IsEquivalent, C>;
 pub(crate) struct IsEquivalent;
+
+/// A [`CycleDetector`] that is used in `find_legacy_typevars` methods.
+pub(crate) type FindLegacyTypeVarsVisitor<'db> = CycleDetector<FindLegacyTypeVars, Type<'db>, ()>;
+pub(crate) struct FindLegacyTypeVars;
 
 /// A [`TypeTransformer`] that is used in `normalized` methods.
 pub(crate) type NormalizedVisitor<'db> = TypeTransformer<'db, Normalized>;
@@ -485,13 +489,18 @@ fn walk_property_instance_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
 impl get_size2::GetSize for PropertyInstanceType<'_> {}
 
 impl<'db> PropertyInstanceType<'db> {
-    fn apply_type_mapping<'a>(self, db: &'db dyn Db, type_mapping: &TypeMapping<'a, 'db>) -> Self {
+    fn apply_type_mapping_impl<'a>(
+        self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        visitor: &ApplyTypeMappingVisitor<'db>,
+    ) -> Self {
         let getter = self
             .getter(db)
-            .map(|ty| ty.apply_type_mapping(db, type_mapping));
+            .map(|ty| ty.apply_type_mapping_impl(db, type_mapping, visitor));
         let setter = self
             .setter(db)
-            .map(|ty| ty.apply_type_mapping(db, type_mapping));
+            .map(|ty| ty.apply_type_mapping_impl(db, type_mapping, visitor));
         Self::new(db, getter, setter)
     }
 
@@ -503,17 +512,18 @@ impl<'db> PropertyInstanceType<'db> {
         )
     }
 
-    fn find_legacy_typevars(
+    fn find_legacy_typevars_impl(
         self,
         db: &'db dyn Db,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         if let Some(ty) = self.getter(db) {
-            ty.find_legacy_typevars(db, binding_context, typevars);
+            ty.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
         }
         if let Some(ty) = self.setter(db) {
-            ty.find_legacy_typevars(db, binding_context, typevars);
+            ty.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
         }
     }
 
@@ -1113,9 +1123,7 @@ impl<'db> Type<'db> {
     #[must_use]
     pub(crate) fn normalized_impl(self, db: &'db dyn Db, visitor: &NormalizedVisitor<'db>) -> Self {
         match self {
-            Type::Union(union) => {
-                visitor.visit(self, || Type::Union(union.normalized_impl(db, visitor)))
-            }
+            Type::Union(union) => visitor.visit(self, || union.normalized_impl(db, visitor)),
             Type::Intersection(intersection) => visitor.visit(self, || {
                 Type::Intersection(intersection.normalized_impl(db, visitor))
             }),
@@ -1355,7 +1363,8 @@ impl<'db> Type<'db> {
     /// intersection simplification dependent on the order in which elements are added), so we do
     /// not use this more general definition of subtyping.
     pub(crate) fn is_subtype_of(self, db: &'db dyn Db, target: Type<'db>) -> bool {
-        self.when_subtype_of(db, target)
+        self.when_subtype_of::<ConstraintSet>(db, target)
+            .is_always_satisfied(db)
     }
 
     fn when_subtype_of<C: Constraints<'db>>(self, db: &'db dyn Db, target: Type<'db>) -> C {
@@ -1366,7 +1375,8 @@ impl<'db> Type<'db> {
     ///
     /// [assignable to]: https://typing.python.org/en/latest/spec/concepts.html#the-assignable-to-or-consistent-subtyping-relation
     pub(crate) fn is_assignable_to(self, db: &'db dyn Db, target: Type<'db>) -> bool {
-        self.when_assignable_to(db, target)
+        self.when_assignable_to::<ConstraintSet>(db, target)
+            .is_always_satisfied(db)
     }
 
     fn when_assignable_to<C: Constraints<'db>>(self, db: &'db dyn Db, target: Type<'db>) -> C {
@@ -1844,7 +1854,8 @@ impl<'db> Type<'db> {
     ///
     /// [equivalent to]: https://typing.python.org/en/latest/spec/glossary.html#term-equivalent
     pub(crate) fn is_equivalent_to(self, db: &'db dyn Db, other: Type<'db>) -> bool {
-        self.when_equivalent_to(db, other)
+        self.when_equivalent_to::<ConstraintSet>(db, other)
+            .is_always_satisfied(db)
     }
 
     fn when_equivalent_to<C: Constraints<'db>>(self, db: &'db dyn Db, other: Type<'db>) -> C {
@@ -1879,14 +1890,14 @@ impl<'db> Type<'db> {
             }
 
             (Type::TypeAlias(self_alias), _) => {
-                let self_alias_ty = self_alias.value_type(db);
+                let self_alias_ty = self_alias.value_type(db).normalized(db);
                 visitor.visit((self_alias_ty, other), || {
                     self_alias_ty.is_equivalent_to_impl(db, other, visitor)
                 })
             }
 
             (_, Type::TypeAlias(other_alias)) => {
-                let other_alias_ty = other_alias.value_type(db);
+                let other_alias_ty = other_alias.value_type(db).normalized(db);
                 visitor.visit((self, other_alias_ty), || {
                     self.is_equivalent_to_impl(db, other_alias_ty, visitor)
                 })
@@ -1944,7 +1955,8 @@ impl<'db> Type<'db> {
     /// Note: This function aims to have no false positives, but might return
     /// wrong `false` answers in some cases.
     pub(crate) fn is_disjoint_from(self, db: &'db dyn Db, other: Type<'db>) -> bool {
-        self.when_disjoint_from(db, other)
+        self.when_disjoint_from::<ConstraintSet>(db, other)
+            .is_always_satisfied(db)
     }
 
     fn when_disjoint_from<C: Constraints<'db>>(self, db: &'db dyn Db, other: Type<'db>) -> C {
@@ -1979,11 +1991,6 @@ impl<'db> Type<'db> {
 
             (Type::Dynamic(_), _) | (_, Type::Dynamic(_)) => C::unsatisfiable(db),
 
-            (Type::TypedDict(_), _) | (_, Type::TypedDict(_)) => {
-                // TODO: Implement disjointness for TypedDict
-                C::unsatisfiable(db)
-            }
-
             (Type::TypeAlias(alias), _) => {
                 let self_alias_ty = alias.value_type(db);
                 visitor.visit((self_alias_ty, other), || {
@@ -1996,6 +2003,11 @@ impl<'db> Type<'db> {
                 visitor.visit((self, other_alias_ty), || {
                     self.is_disjoint_from_impl(db, other_alias_ty, visitor)
                 })
+            }
+
+            (Type::TypedDict(_), _) | (_, Type::TypedDict(_)) => {
+                // TODO: Implement disjointness for TypedDict
+                C::unsatisfiable(db)
             }
 
             // A typevar is never disjoint from itself, since all occurrences of the typevar must
@@ -4834,7 +4846,7 @@ impl<'db> Type<'db> {
         argument_types: &CallArguments<'_, 'db>,
     ) -> Result<Bindings<'db>, CallError<'db>> {
         self.bindings(db)
-            .match_parameters(argument_types)
+            .match_parameters(db, argument_types)
             .check_types(db, argument_types)
     }
 
@@ -4883,7 +4895,7 @@ impl<'db> Type<'db> {
             Place::Type(dunder_callable, boundness) => {
                 let bindings = dunder_callable
                     .bindings(db)
-                    .match_parameters(argument_types)
+                    .match_parameters(db, argument_types)
                     .check_types(db, argument_types)?;
                 if boundness == Boundness::PossiblyUnbound {
                     return Err(CallDunderError::PossiblyUnbound(Box::new(bindings)));
@@ -5917,6 +5929,8 @@ impl<'db> Type<'db> {
             Type::AlwaysTruthy | Type::AlwaysFalsy => KnownClass::Type.to_instance(db),
             Type::BoundSuper(_) => KnownClass::Super.to_class_literal(db),
             Type::ProtocolInstance(protocol) => protocol.to_meta_type(db),
+            // `TypedDict` instances are instances of `dict` at runtime, but its important that we
+            // understand a more specific meta type in order to correctly handle `__getitem__`.
             Type::TypedDict(typed_dict) => SubclassOfType::from(db, typed_dict.defining_class()),
             Type::TypeAlias(alias) => alias.value_type(db).to_meta_type(db),
         }
@@ -5959,13 +5973,18 @@ impl<'db> Type<'db> {
     /// Note that this does not specialize generic classes, functions, or type aliases! That is a
     /// different operation that is performed explicitly (via a subscript operation), or implicitly
     /// via a call to the generic object.
-    #[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+    #[salsa::tracked(heap_size=ruff_memory_usage::heap_size, cycle_fn=apply_specialization_cycle_recover, cycle_initial=apply_specialization_cycle_initial)]
     pub(crate) fn apply_specialization(
         self,
         db: &'db dyn Db,
         specialization: Specialization<'db>,
     ) -> Type<'db> {
-        self.apply_type_mapping(db, &TypeMapping::Specialization(specialization))
+        let new_specialization =
+            self.apply_type_mapping(db, &TypeMapping::Specialization(specialization));
+        match specialization.materialization_kind(db) {
+            None => new_specialization,
+            Some(materialization_kind) => new_specialization.materialize(db, materialization_kind),
+        }
     }
 
     fn apply_type_mapping<'a>(
@@ -6063,18 +6082,18 @@ impl<'db> Type<'db> {
 
             Type::MethodWrapper(MethodWrapperKind::PropertyDunderGet(property)) => {
                 Type::MethodWrapper(MethodWrapperKind::PropertyDunderGet(
-                    property.apply_type_mapping(db, type_mapping),
+                    property.apply_type_mapping_impl(db, type_mapping, visitor),
                 ))
             }
 
             Type::MethodWrapper(MethodWrapperKind::PropertyDunderSet(property)) => {
                 Type::MethodWrapper(MethodWrapperKind::PropertyDunderSet(
-                    property.apply_type_mapping(db, type_mapping),
+                    property.apply_type_mapping_impl(db, type_mapping, visitor),
                 ))
             }
 
             Type::Callable(callable) => {
-                Type::Callable(callable.apply_type_mapping(db, type_mapping))
+                Type::Callable(callable.apply_type_mapping_impl(db, type_mapping, visitor))
             }
 
             Type::GenericAlias(generic) => {
@@ -6090,7 +6109,7 @@ impl<'db> Type<'db> {
             ),
 
             Type::PropertyInstance(property) => {
-                Type::PropertyInstance(property.apply_type_mapping(db, type_mapping))
+                Type::PropertyInstance(property.apply_type_mapping_impl(db, type_mapping, visitor))
             }
 
             Type::Union(union) => union.map(db, |element| {
@@ -6158,6 +6177,21 @@ impl<'db> Type<'db> {
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
     ) {
+        self.find_legacy_typevars_impl(
+            db,
+            binding_context,
+            typevars,
+            &FindLegacyTypeVarsVisitor::default(),
+        );
+    }
+
+    pub(crate) fn find_legacy_typevars_impl(
+        self,
+        db: &'db dyn Db,
+        binding_context: Option<Definition<'db>>,
+        typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
+    ) {
         match self {
             Type::NonInferableTypeVar(bound_typevar) | Type::TypeVar(bound_typevar) => {
                 if matches!(
@@ -6171,80 +6205,94 @@ impl<'db> Type<'db> {
             }
 
             Type::FunctionLiteral(function) => {
-                function.find_legacy_typevars(db, binding_context, typevars);
+                function.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::BoundMethod(method) => {
-                method
-                    .self_instance(db)
-                    .find_legacy_typevars(db, binding_context, typevars);
-                method
-                    .function(db)
-                    .find_legacy_typevars(db, binding_context, typevars);
+                method.self_instance(db).find_legacy_typevars_impl(
+                    db,
+                    binding_context,
+                    typevars,
+                    visitor,
+                );
+                method.function(db).find_legacy_typevars_impl(
+                    db,
+                    binding_context,
+                    typevars,
+                    visitor,
+                );
             }
 
             Type::MethodWrapper(
                 MethodWrapperKind::FunctionTypeDunderGet(function)
                 | MethodWrapperKind::FunctionTypeDunderCall(function),
             ) => {
-                function.find_legacy_typevars(db, binding_context, typevars);
+                function.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::MethodWrapper(
                 MethodWrapperKind::PropertyDunderGet(property)
                 | MethodWrapperKind::PropertyDunderSet(property),
             ) => {
-                property.find_legacy_typevars(db, binding_context, typevars);
+                property.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::Callable(callable) => {
-                callable.find_legacy_typevars(db, binding_context, typevars);
+                callable.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::PropertyInstance(property) => {
-                property.find_legacy_typevars(db, binding_context, typevars);
+                property.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::Union(union) => {
                 for element in union.elements(db) {
-                    element.find_legacy_typevars(db, binding_context, typevars);
+                    element.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
                 }
             }
             Type::Intersection(intersection) => {
                 for positive in intersection.positive(db) {
-                    positive.find_legacy_typevars(db, binding_context, typevars);
+                    positive.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
                 }
                 for negative in intersection.negative(db) {
-                    negative.find_legacy_typevars(db, binding_context, typevars);
+                    negative.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
                 }
             }
 
             Type::GenericAlias(alias) => {
-                alias.find_legacy_typevars(db, binding_context, typevars);
+                alias.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::NominalInstance(instance) => {
-                instance.find_legacy_typevars(db, binding_context, typevars);
+                instance.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::ProtocolInstance(instance) => {
-                instance.find_legacy_typevars(db, binding_context, typevars);
+                instance.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::SubclassOf(subclass_of) => {
-                subclass_of.find_legacy_typevars(db, binding_context, typevars);
+                subclass_of.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
 
             Type::TypeIs(type_is) => {
-                type_is
-                    .return_type(db)
-                    .find_legacy_typevars(db, binding_context, typevars);
+                type_is.return_type(db).find_legacy_typevars_impl(
+                    db,
+                    binding_context,
+                    typevars,
+                    visitor,
+                );
             }
 
             Type::TypeAlias(alias) => {
-                alias
-                    .value_type(db)
-                    .find_legacy_typevars(db, binding_context, typevars);
+                visitor.visit(self, || {
+                    alias.value_type(db).find_legacy_typevars_impl(
+                        db,
+                        binding_context,
+                        typevars,
+                        visitor,
+                    );
+                });
             }
 
             Type::Dynamic(_)
@@ -6576,6 +6624,24 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
     }
 }
 
+fn apply_specialization_cycle_recover<'db>(
+    _db: &'db dyn Db,
+    _value: &Type<'db>,
+    _count: u32,
+    _self: Type<'db>,
+    _specialization: Specialization<'db>,
+) -> salsa::CycleRecoveryAction<Type<'db>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+fn apply_specialization_cycle_initial<'db>(
+    _db: &'db dyn Db,
+    _self: Type<'db>,
+    _specialization: Specialization<'db>,
+) -> Type<'db> {
+    Type::Never
+}
+
 /// A mapping that can be applied to a type, producing another type. This is applied inductively to
 /// the components of complex types.
 ///
@@ -6659,13 +6725,6 @@ impl<'db> TypeMapping<'_, 'db> {
             TypeMapping::MarkTypeVarsInferable(binding_context) => {
                 TypeMapping::MarkTypeVarsInferable(*binding_context)
             }
-        }
-    }
-
-    fn materialization_kind(&self, db: &'db dyn Db) -> Option<MaterializationKind> {
-        match self {
-            TypeMapping::Specialization(specialization) => specialization.materialization_kind(db),
-            _ => None,
         }
     }
 }
@@ -7474,6 +7533,28 @@ pub struct BoundTypeVarInstance<'db> {
 impl get_size2::GetSize for BoundTypeVarInstance<'_> {}
 
 impl<'db> BoundTypeVarInstance<'db> {
+    /// Create a new PEP 695 type variable that can be used in signatures
+    /// of synthetic generic functions.
+    pub(crate) fn synthetic(
+        db: &'db dyn Db,
+        name: &'static str,
+        variance: TypeVarVariance,
+    ) -> Self {
+        Self::new(
+            db,
+            TypeVarInstance::new(
+                db,
+                Name::new_static(name),
+                None, // definition
+                None, // _bound_or_constraints
+                Some(variance),
+                None, // _default
+                TypeVarKind::Pep695,
+            ),
+            BindingContext::Synthetic,
+        )
+    }
+
     pub(crate) fn variance_with_polarity(
         self,
         db: &'db dyn Db,
@@ -7621,7 +7702,17 @@ impl<'db> TypeVarBoundOrConstraints<'db> {
                 TypeVarBoundOrConstraints::UpperBound(bound.normalized_impl(db, visitor))
             }
             TypeVarBoundOrConstraints::Constraints(constraints) => {
-                TypeVarBoundOrConstraints::Constraints(constraints.normalized_impl(db, visitor))
+                // Constraints are a non-normalized union by design (it's not really a union at
+                // all, we are just using a union to store the types). Normalize the types but not
+                // the containing union.
+                TypeVarBoundOrConstraints::Constraints(UnionType::new(
+                    db,
+                    constraints
+                        .elements(db)
+                        .iter()
+                        .map(|ty| ty.normalized_impl(db, visitor))
+                        .collect::<Box<_>>(),
+                ))
             }
         }
     }
@@ -8899,22 +8990,29 @@ impl<'db> CallableType<'db> {
         )
     }
 
-    fn apply_type_mapping<'a>(self, db: &'db dyn Db, type_mapping: &TypeMapping<'a, 'db>) -> Self {
+    fn apply_type_mapping_impl<'a>(
+        self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        visitor: &ApplyTypeMappingVisitor<'db>,
+    ) -> Self {
         CallableType::new(
             db,
-            self.signatures(db).apply_type_mapping(db, type_mapping),
+            self.signatures(db)
+                .apply_type_mapping_impl(db, type_mapping, visitor),
             self.is_function_like(db),
         )
     }
 
-    fn find_legacy_typevars(
+    fn find_legacy_typevars_impl(
         self,
         db: &'db dyn Db,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
+        visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         self.signatures(db)
-            .find_legacy_typevars(db, binding_context, typevars);
+            .find_legacy_typevars_impl(db, binding_context, typevars, visitor);
     }
 
     /// Check whether this callable type has the given relation to another callable type.
@@ -9577,18 +9675,25 @@ impl<'db> UnionType<'db> {
     ///
     /// See [`Type::normalized`] for more details.
     #[must_use]
-    pub(crate) fn normalized(self, db: &'db dyn Db) -> Self {
+    pub(crate) fn normalized(self, db: &'db dyn Db) -> Type<'db> {
         self.normalized_impl(db, &NormalizedVisitor::default())
     }
 
-    pub(crate) fn normalized_impl(self, db: &'db dyn Db, visitor: &NormalizedVisitor<'db>) -> Self {
-        let mut new_elements: Vec<Type<'db>> = self
-            .elements(db)
+    pub(crate) fn normalized_impl(
+        self,
+        db: &'db dyn Db,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Type<'db> {
+        self.elements(db)
             .iter()
-            .map(|element| element.normalized_impl(db, visitor))
-            .collect();
-        new_elements.sort_unstable_by(|l, r| union_or_intersection_elements_ordering(db, l, r));
-        UnionType::new(db, new_elements.into_boxed_slice())
+            .map(|ty| ty.normalized_impl(db, visitor))
+            .fold(
+                UnionBuilder::new(db)
+                    .order_elements(true)
+                    .unpack_aliases(true),
+                UnionBuilder::add,
+            )
+            .build()
     }
 
     pub(crate) fn is_equivalent_to_impl<C: Constraints<'db>>(
@@ -9610,7 +9715,7 @@ impl<'db> UnionType<'db> {
 
         let sorted_self = self.normalized(db);
 
-        if sorted_self == other {
+        if sorted_self == Type::Union(other) {
             return C::always_satisfiable(db);
         }
 
@@ -9650,6 +9755,16 @@ pub(super) fn walk_intersection_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>
 }
 
 impl<'db> IntersectionType<'db> {
+    pub(crate) fn from_elements<I, T>(db: &'db dyn Db, elements: I) -> Type<'db>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Type<'db>>,
+    {
+        IntersectionBuilder::new(db)
+            .positive_elements(elements)
+            .build()
+    }
+
     /// Return a new `IntersectionType` instance with the positive and negative types sorted
     /// according to a canonical ordering, and other normalizations applied to each element as applicable.
     ///
