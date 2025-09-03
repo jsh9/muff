@@ -46,7 +46,7 @@ use crate::types::diagnostic::{INVALID_AWAIT, INVALID_TYPE_FORM, UNSUPPORTED_BOO
 pub use crate::types::display::DisplaySettings;
 use crate::types::enums::{enum_metadata, is_single_member_enum};
 use crate::types::function::{
-    DataclassTransformerParams, FunctionDecorators, FunctionSpans, FunctionType, KnownFunction,
+    DataclassTransformerParams, FunctionSpans, FunctionType, KnownFunction,
 };
 use crate::types::generics::{
     GenericContext, PartialSpecialization, Specialization, bind_typevar, walk_generic_context,
@@ -1050,6 +1050,16 @@ impl<'db> Type<'db> {
                 .elements(db)
                 .iter()
                 .all(|ty| ty.is_single_valued(db) || ty.is_bool(db) || ty.is_literal_string())
+        }) || self.is_bool(db)
+            || self.is_literal_string()
+    }
+
+    pub(crate) fn is_union_with_single_valued(&self, db: &'db dyn Db) -> bool {
+        self.into_union().is_some_and(|union| {
+            union
+                .elements(db)
+                .iter()
+                .any(|ty| ty.is_single_valued(db) || ty.is_bool(db) || ty.is_literal_string())
         }) || self.is_bool(db)
             || self.is_literal_string()
     }
@@ -8819,10 +8829,7 @@ impl<'db> BoundMethodType<'db> {
     /// a `@classmethod`, then it should be an instance of that bound-instance type.
     pub(crate) fn typing_self_type(self, db: &'db dyn Db) -> Type<'db> {
         let mut self_instance = self.self_instance(db);
-        if self
-            .function(db)
-            .has_known_decorator(db, FunctionDecorators::CLASSMETHOD)
-        {
+        if self.function(db).is_classmethod(db) {
             self_instance = self_instance.to_instance(db).unwrap_or_else(Type::unknown);
         }
         self_instance
@@ -9955,14 +9962,6 @@ impl<'db> StringLiteralType<'db> {
     /// The length of the string, as would be returned by Python's `len()`.
     pub(crate) fn python_len(self, db: &'db dyn Db) -> usize {
         self.value(db).chars().count()
-    }
-
-    /// Return an iterator over each character in the string literal.
-    /// as would be returned by Python's `iter()`.
-    pub(crate) fn iter_each_char(self, db: &'db dyn Db) -> impl Iterator<Item = Self> {
-        self.value(db)
-            .chars()
-            .map(|c| StringLiteralType::new(db, c.to_string().into_boxed_str()))
     }
 }
 
