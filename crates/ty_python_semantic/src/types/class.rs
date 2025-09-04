@@ -3,10 +3,8 @@ use std::sync::{LazyLock, Mutex};
 use super::TypeVarVariance;
 use super::{
     BoundTypeVarInstance, IntersectionBuilder, MemberLookupPolicy, Mro, MroError, MroIterator,
-    SpecialFormType, SubclassOfType, Truthiness, Type, TypeQualifiers,
-    class_base::ClassBase,
-    function::{FunctionDecorators, FunctionType},
-    infer_expression_type, infer_unpack_types,
+    SpecialFormType, SubclassOfType, Truthiness, Type, TypeQualifiers, class_base::ClassBase,
+    function::FunctionType, infer_expression_type, infer_unpack_types,
 };
 use crate::FxOrderMap;
 use crate::module_resolver::KnownModule;
@@ -31,10 +29,10 @@ use crate::types::typed_dict::typed_dict_params_from_class_def;
 use crate::types::{
     ApplyTypeMappingVisitor, Binding, BoundSuperError, BoundSuperType, CallableType,
     DataclassParams, DeprecatedInstance, FindLegacyTypeVarsVisitor, HasRelationToVisitor,
-    IsEquivalentVisitor, KnownInstanceType, ManualPEP695TypeAliasType, MaterializationKind,
-    NormalizedVisitor, PropertyInstanceType, StringLiteralType, TypeAliasType, TypeMapping,
-    TypeRelation, TypeVarBoundOrConstraints, TypeVarInstance, TypeVarKind, TypedDictParams,
-    UnionBuilder, VarianceInferable, declaration_type, infer_definition_types,
+    IsEquivalentVisitor, KnownInstanceType, ManualPEP695TypeAliasType, NormalizedVisitor,
+    PropertyInstanceType, StringLiteralType, TypeAliasType, TypeMapping, TypeRelation,
+    TypeVarBoundOrConstraints, TypeVarInstance, TypeVarKind, TypedDictParams, UnionBuilder,
+    VarianceInferable, declaration_type, infer_definition_types,
 };
 use crate::{
     Db, FxIndexMap, FxOrderSet, Program,
@@ -272,19 +270,6 @@ impl<'db> GenericAlias<'db> {
         )
     }
 
-    pub(super) fn materialize(
-        self,
-        db: &'db dyn Db,
-        materialization_kind: MaterializationKind,
-    ) -> Self {
-        Self::new(
-            db,
-            self.origin(db),
-            self.specialization(db)
-                .materialize(db, materialization_kind),
-        )
-    }
-
     pub(crate) fn definition(self, db: &'db dyn Db) -> Definition<'db> {
         self.origin(db).definition(db)
     }
@@ -407,17 +392,6 @@ impl<'db> ClassType<'db> {
         match self {
             Self::NonGeneric(_) => self,
             Self::Generic(generic) => Self::Generic(generic.normalized_impl(db, visitor)),
-        }
-    }
-
-    pub(super) fn materialize(
-        self,
-        db: &'db dyn Db,
-        materialization_kind: MaterializationKind,
-    ) -> Self {
-        match self {
-            Self::NonGeneric(_) => self,
-            Self::Generic(generic) => Self::Generic(generic.materialize(db, materialization_kind)),
         }
     }
 
@@ -771,7 +745,17 @@ impl<'db> ClassType<'db> {
         let fallback_member_lookup = || {
             class_literal
                 .own_class_member(db, inherited_generic_context, specialization, name)
-                .map_type(|ty| ty.apply_optional_specialization(db, specialization))
+                .map_type(|ty| {
+                    let ty = ty.apply_optional_specialization(db, specialization);
+                    match specialization.map(|spec| spec.materialization_kind(db)) {
+                        Some(Some(materialization_kind)) => ty.materialize(
+                            db,
+                            materialization_kind,
+                            &ApplyTypeMappingVisitor::default(),
+                        ),
+                        _ => ty,
+                    }
+                })
         };
 
         let synthesize_simple_tuple_method = |return_type| {
@@ -1256,11 +1240,8 @@ pub(super) enum MethodDecorator {
 }
 
 impl MethodDecorator {
-    fn try_from_fn_type(db: &dyn Db, fn_type: FunctionType) -> Result<Self, ()> {
-        match (
-            fn_type.is_classmethod(db),
-            fn_type.has_known_decorator(db, FunctionDecorators::STATICMETHOD),
-        ) {
+    pub(crate) fn try_from_fn_type(db: &dyn Db, fn_type: FunctionType) -> Result<Self, ()> {
+        match (fn_type.is_classmethod(db), fn_type.is_staticmethod(db)) {
             (true, true) => Err(()), // A method can't be static and class method at the same time.
             (true, false) => Ok(Self::ClassMethod),
             (false, true) => Ok(Self::StaticMethod),

@@ -65,7 +65,7 @@ use crate::semantic_index::definition::Definition;
 use crate::semantic_index::scope::ScopeId;
 use crate::semantic_index::semantic_index;
 use crate::types::call::{Binding, CallArguments};
-use crate::types::constraints::Constraints;
+use crate::types::constraints::{ConstraintSet, Constraints};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     INVALID_ARGUMENT_TYPE, REDUNDANT_CAST, STATIC_ASSERT_ERROR, TYPE_ASSERTION_FAILURE,
@@ -141,17 +141,6 @@ impl FunctionDecorators {
             },
             _ => FunctionDecorators::empty(),
         }
-    }
-
-    pub(super) fn from_decorator_types<'db>(
-        db: &'db dyn Db,
-        types: impl IntoIterator<Item = Type<'db>>,
-    ) -> Self {
-        types
-            .into_iter()
-            .fold(FunctionDecorators::empty(), |acc, ty| {
-                acc | FunctionDecorators::from_decorator_type(db, ty)
-            })
     }
 }
 
@@ -731,6 +720,12 @@ impl<'db> FunctionType<'db> {
             )
     }
 
+    /// Returns true if this method is decorated with `@staticmethod`, or if it is implicitly a
+    /// static method.
+    pub(crate) fn is_staticmethod(self, db: &'db dyn Db) -> bool {
+        self.has_known_decorator(db, FunctionDecorators::STATICMETHOD) || self.name(db) == "__new__"
+    }
+
     /// If the implementation of this function is deprecated, returns the `@warnings.deprecated`.
     ///
     /// Checking if an overload is deprecated requires deeper call analysis.
@@ -1182,6 +1177,10 @@ pub enum KnownFunction {
     HasMember,
     /// `ty_extensions.reveal_protocol_interface`
     RevealProtocolInterface,
+    /// `ty_extensions.reveal_when_assignable_to`
+    RevealWhenAssignableTo,
+    /// `ty_extensions.reveal_when_subtype_of`
+    RevealWhenSubtypeOf,
 }
 
 impl KnownFunction {
@@ -1247,6 +1246,8 @@ impl KnownFunction {
             | Self::StaticAssert
             | Self::HasMember
             | Self::RevealProtocolInterface
+            | Self::RevealWhenAssignableTo
+            | Self::RevealWhenSubtypeOf
             | Self::AllMembers => module.is_ty_extensions(),
             Self::ImportModule => module.is_importlib(),
         }
@@ -1542,6 +1543,54 @@ impl KnownFunction {
                 overload.set_return_type(Type::module_literal(db, file, module));
             }
 
+            KnownFunction::RevealWhenAssignableTo => {
+                let [Some(ty_a), Some(ty_b)] = overload.parameter_types() else {
+                    return;
+                };
+                let constraints = ty_a.when_assignable_to::<ConstraintSet>(db, *ty_b);
+                let Some(builder) =
+                    context.report_diagnostic(DiagnosticId::RevealedType, Severity::Info)
+                else {
+                    return;
+                };
+                let mut diag = builder.into_diagnostic("Assignability holds");
+                let span = context.span(call_expression);
+                if constraints.is_always_satisfied(db) {
+                    diag.annotate(Annotation::primary(span).message("always"));
+                } else if constraints.is_never_satisfied(db) {
+                    diag.annotate(Annotation::primary(span).message("never"));
+                } else {
+                    diag.annotate(
+                        Annotation::primary(span)
+                            .message(format_args!("when {}", constraints.display(db))),
+                    );
+                }
+            }
+
+            KnownFunction::RevealWhenSubtypeOf => {
+                let [Some(ty_a), Some(ty_b)] = overload.parameter_types() else {
+                    return;
+                };
+                let constraints = ty_a.when_subtype_of::<ConstraintSet>(db, *ty_b);
+                let Some(builder) =
+                    context.report_diagnostic(DiagnosticId::RevealedType, Severity::Info)
+                else {
+                    return;
+                };
+                let mut diag = builder.into_diagnostic("Subtyping holds");
+                let span = context.span(call_expression);
+                if constraints.is_always_satisfied(db) {
+                    diag.annotate(Annotation::primary(span).message("always"));
+                } else if constraints.is_never_satisfied(db) {
+                    diag.annotate(Annotation::primary(span).message("never"));
+                } else {
+                    diag.annotate(
+                        Annotation::primary(span)
+                            .message(format_args!("when {}", constraints.display(db))),
+                    );
+                }
+            }
+
             _ => {}
         }
     }
@@ -1602,6 +1651,8 @@ pub(crate) mod tests {
                 | KnownFunction::IsEquivalentTo
                 | KnownFunction::HasMember
                 | KnownFunction::RevealProtocolInterface
+                | KnownFunction::RevealWhenAssignableTo
+                | KnownFunction::RevealWhenSubtypeOf
                 | KnownFunction::AllMembers => KnownModule::TyExtensions,
 
                 KnownFunction::ImportModule => KnownModule::ImportLib,
