@@ -1,67 +1,141 @@
-#!/usr/bin/env zsh
+#!/bin/bash
 set -euo pipefail
 
-# Create or update a GitHub release and upload provided assets.
-#
-# Usage:
-#   release_scripts/step-2-create-github-release.sh --tag vX.Y.Z [--assets file1 ...]
-# If --assets is omitted, uploads any of: ruff-*.tar.gz, ruff-*.zip and their .sha256 in CWD.
+# GitHub release creation script
+# Based on .github/workflows/release.yml
 
-function need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing: $1" >&2; exit 1; } }
-need gh
-
-TAG=""
-ASSETS=()
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --tag)
-      TAG="$2"; shift 2 ;;
-    --assets)
-      shift
-      while [[ $# -gt 0 && "$1" != --* ]]; do
-        ASSETS+="$1"; shift
-      done ;;
-    *)
-      echo "Unknown arg: $1" >&2; exit 2 ;;
-  esac
-done
-
-if [[ -z "$TAG" ]]; then
-  echo "--tag is required" >&2; exit 2
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <version-tag>"
+    echo "Example: $0 v1.0.0"
+    exit 1
 fi
 
-if [[ ${#ASSETS[@]} -eq 0 ]]; then
-  ASSETS=(
-    muff-*.tar.gz
-    muff-*.zip
-    muff-*.tar.gz.sha256
-    muff-*.zip.sha256
-    artifacts/muff-*.tar.gz
-    artifacts/muff-*.zip
-    artifacts/muff-*.tar.gz.sha256
-    artifacts/muff-*.zip.sha256
-  )
+VERSION_TAG="$1"
+
+echo "🚀 Creating GitHub release: $VERSION_TAG"
+
+# Check if gh CLI is installed
+if ! command -v gh &> /dev/null; then
+    echo "❌ GitHub CLI (gh) is required but not installed"
+    echo "Install with: brew install gh"
+    exit 1
 fi
 
-EXISTING=0
-if gh release view "$TAG" >/dev/null 2>&1; then EXISTING=1; fi
-
-FOUND=()
-for p in "$ASSETS[@]"; do
-  for f in ${(~)p}; do
-    [[ -f "$f" ]] && FOUND+="$f"
-  done
-done
-
-if [[ ${#FOUND[@]} -eq 0 ]]; then
-  echo "No assets found to upload." >&2; exit 1
+# Check if we're in a git repository
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "❌ Not in a git repository"
+    exit 1
 fi
 
-if [[ $EXISTING -eq 1 ]]; then
-  gh release upload "$TAG" "$FOUND[@]" --clobber
+# Check if user is authenticated with GitHub
+if ! gh auth status > /dev/null 2>&1; then
+    echo "❌ Not authenticated with GitHub. Run: gh auth login"
+    exit 1
+fi
+
+# Check for binary archives in artifacts/
+ARCH=$(uname -m)
+if [[ "$ARCH" == "arm64" ]]; then
+    TARGET="aarch64-apple-darwin"
+elif [[ "$ARCH" == "x86_64" ]]; then
+    TARGET="x86_64-apple-darwin"
 else
-  gh release create "$TAG" "$FOUND[@]" --title "$TAG" --notes "Release $TAG"
+    TARGET="unknown"
 fi
 
-echo "Done: GitHub release $TAG updated with ${#FOUND[@]} asset(s)."
+ARTIFACTS_DIR="artifacts"
+ARCHIVE_FILE="$ARTIFACTS_DIR/muff-$TARGET.tar.gz"
+CHECKSUM_FILE="$ARCHIVE_FILE.sha256"
+
+if [[ ! -f "$ARCHIVE_FILE" || ! -f "$CHECKSUM_FILE" ]]; then
+    echo "⚠️  No platform-specific archive found for this host ($TARGET)."
+    echo "   Looking for any artifacts in '$ARTIFACTS_DIR/' instead..."
+    mapfile -t FALLBACK_TARS < <(ls -1 "$ARTIFACTS_DIR"/muff-*.tar.gz 2>/dev/null || true)
+    mapfile -t FALLBACK_SUMS < <(ls -1 "$ARTIFACTS_DIR"/muff-*.tar.gz.sha256 2>/dev/null || true)
+    if [[ ${#FALLBACK_TARS[@]} -eq 0 ]]; then
+        echo "❌ No archives found in '$ARTIFACTS_DIR/'. Run the step-1 build scripts first."
+        exit 1
+    fi
+fi
+
+# Check if wheels exist
+if [[ ! -d "dist" ]] || ! ls dist/*.whl 1> /dev/null 2>&1; then
+    echo "❌ No wheels found in dist/. Run local-build.sh first."
+    exit 1
+fi
+
+# Get current commit
+RELEASE_COMMIT=$(git rev-parse HEAD)
+
+# Check if tag already exists
+if git tag -l | grep -q "^$VERSION_TAG$"; then
+    echo "⚠️  Tag $VERSION_TAG already exists locally"
+    read -p "Do you want to delete and recreate it? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        git tag -d "$VERSION_TAG"
+        git push origin ":refs/tags/$VERSION_TAG" 2>/dev/null || true
+    else
+        echo "❌ Aborted"
+        exit 1
+    fi
+fi
+
+# Create and push tag
+echo "🏷️  Creating and pushing tag: $VERSION_TAG"
+git tag "$VERSION_TAG" "$RELEASE_COMMIT"
+git push origin "$VERSION_TAG"
+
+# Generate release notes
+RELEASE_TITLE="muff $VERSION_TAG"
+RELEASE_BODY="## What's Changed
+
+This release includes:
+- Binary distributions for macOS ($TARGET)
+- Python wheels for PyPI distribution
+- Source distribution
+
+## Installation
+
+### From PyPI
+\`\`\`bash
+pip install muff
+\`\`\`
+
+### From GitHub Release
+\`\`\`bash
+# Download and extract the binary
+curl -LO https://github.com/$(gh repo view --json owner,name -q '.owner.login + "/" + .name')/releases/download/$VERSION_TAG/$ARCHIVE_FILE
+tar -xzf $ARCHIVE_FILE
+# Move to PATH
+sudo mv muff-$TARGET/muff /usr/local/bin/
+\`\`\`
+
+## Checksums
+
+\`\`\`
+$(cat "$CHECKSUM_FILE")
+\`\`\`
+
+**Full Changelog**: https://github.com/$(gh repo view --json owner,name -q '.owner.login + "/" + .name')/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "Initial")...$VERSION_TAG"
+
+# Write release notes to temporary file
+NOTES_FILE=$(mktemp)
+echo "$RELEASE_BODY" > "$NOTES_FILE"
+
+# Create the GitHub release with artifacts
+echo "📦 Creating GitHub release with artifacts..."
+gh release create "$VERSION_TAG" \
+    --target "$RELEASE_COMMIT" \
+    --title "$RELEASE_TITLE" \
+    --notes-file "$NOTES_FILE" \
+    "$ARTIFACTS_DIR"/muff-*.tar.gz \
+    "$ARTIFACTS_DIR"/muff-*.tar.gz.sha256 \
+    dist/*.whl \
+    dist/*.tar.gz
+
+# Clean up
+rm "$NOTES_FILE"
+
+echo "✅ GitHub release created successfully!"
+echo "🌐 View at: $(gh repo view --web --json url -q '.url')/releases/tag/$VERSION_TAG"
