@@ -101,24 +101,24 @@ jobs:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
 
-  # custom-build-docker:
-  #   needs:
-  #     - plan
-  #   if: ${{ needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload' || inputs.tag == 'dry-run' }}
-  #   uses: ./.github/workflows/build-docker.yml
-  #   with:
-  #     plan: ${{ needs.plan.outputs.val }}
-  #   secrets: inherit
-  #   permissions:
-  #     "contents": "read"
-  #     "packages": "write"
+  custom-build-docker:
+    needs:
+      - plan
+    if: ${{ needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload' || inputs.tag == 'dry-run' }}
+    uses: ./.github/workflows/build-docker.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "contents": "read"
+      "packages": "write"
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:
     needs:
       - plan
       - custom-build-binaries
-      # - custom-build-docker
+      - custom-build-docker
     runs-on: "depot-ubuntu-latest-4"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -165,10 +165,10 @@ jobs:
     needs:
       - plan
       - custom-build-binaries
-      # - custom-build-docker
+      - custom-build-docker
       - build-global-artifacts
     # Only run if we're "publishing", and only if local and global didn't fail (skipped is fine)
-    if: ${{ always() && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.custom-build-binaries.result == 'skipped' || needs.custom-build-binaries.result == 'success') }}
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.custom-build-binaries.result == 'skipped' || needs.custom-build-binaries.result == 'success') && (needs.custom-build-docker.result == 'skipped' || needs.custom-build-docker.result == 'success') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "depot-ubuntu-latest-4"
@@ -221,20 +221,20 @@ jobs:
       "id-token": "write"
       "packages": "write"
 
-  # custom-publish-wasm:
-  #   needs:
-  #     - plan
-  #     - host
-  #   if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
-  #   uses: ./.github/workflows/publish-wasm.yml
-  #   with:
-  #     plan: ${{ needs.plan.outputs.val }}
-  #   secrets: inherit
-  #   # publish jobs get escalated permissions
-  #   permissions:
-  #     "contents": "read"
-  #     "id-token": "write"
-  #     "packages": "write"
+  custom-publish-wasm:
+    needs:
+      - plan
+      - host
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    uses: ./.github/workflows/publish-wasm.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    # publish jobs get escalated permissions
+    permissions:
+      "contents": "read"
+      "id-token": "write"
+      "packages": "write"
 
   # Create a GitHub Release while uploading all files to it
   announce:
@@ -242,11 +242,11 @@ jobs:
       - plan
       - host
       - custom-publish-pypi
-      # - custom-publish-wasm
+      - custom-publish-wasm
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' && (needs.custom-publish-pypi.result == 'skipped' || needs.custom-publish-pypi.result == 'success') }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.custom-publish-pypi.result == 'skipped' || needs.custom-publish-pypi.result == 'success') && (needs.custom-publish-wasm.result == 'skipped' || needs.custom-publish-wasm.result == 'success') }}
     runs-on: "depot-ubuntu-latest-4"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -278,29 +278,29 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
-  # custom-notify-dependents:
-  #   needs:
-  #     - plan
-  #     - announce
-  #   uses: ./.github/workflows/notify-dependents.yml
-  #   with:
-  #     plan: ${{ needs.plan.outputs.val }}
-  #   secrets: inherit
+  custom-notify-dependents:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/notify-dependents.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
 
-  # custom-publish-docs:
-  #   needs:
-  #     - plan
-  #     - announce
-  #   uses: ./.github/workflows/publish-docs.yml
-  #   with:
-  #     plan: ${{ needs.plan.outputs.val }}
-  #   secrets: inherit
+  custom-publish-docs:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/publish-docs.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
 
-  # custom-publish-playground:
-  #   needs:
-  #     - plan
-  #     - announce
-  #   uses: ./.github/workflows/publish-playground.yml
-  #   with:
-  #     plan: ${{ needs.plan.outputs.val }}
-  #   secrets: inherit
+  custom-publish-playground:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/publish-playground.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit

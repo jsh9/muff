@@ -21,7 +21,6 @@ env:
 jobs:
   ruff_wasm:
     runs-on: ubuntu-latest
-    if: false  # Disabled - WASM publishing not needed for muff fork
     permissions:
       contents: read
       id-token: write

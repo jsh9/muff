@@ -2,7 +2,7 @@
 #
 # Assumed to run as a subworkflow of .github/workflows/release.yml; specifically, as a post-announce
 # job within `cargo-dist`.
-name: "[muff] Notify dependents"
+name: "[ruff] Notify dependents"
 
 on:
   workflow_call:
@@ -15,7 +15,6 @@ jobs:
   update-dependents:
     name: Notify dependents
     runs-on: ubuntu-latest
-    if: false  # Disabled for muff fork - no dependents to notify
     steps:
       - name: "Update pre-commit mirror"
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
