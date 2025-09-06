@@ -337,9 +337,14 @@ rm -f muff-*-unknown-linux-gnu.tar.gz*
 mkdir -p dist
 chmod 777 dist
 
-# Prep README.md for PyPI (create temporary copy to avoid git diff)
+# Prep README.md for PyPI (backup and restore after build)
 echo "📝 Preparing README.md for PyPI..."
-python3 release/transform_readme_temp.py --action create
+READMETMP="$(mktemp)"
+if [[ -f README.md ]]; then
+  cp README.md "$READMETMP" || true
+  trap 'if [[ -f "$READMETMP" ]]; then cp "$READMETMP" README.md 2>/dev/null || true; rm -f "$READMETMP"; fi' EXIT
+fi
+python3 scripts/transform_readme.py --target pypi || true
 
 # Build function using Docker manylinux containers
 build_target() {
@@ -494,11 +499,6 @@ echo "   - ✅ Docker image used: $MANYLINUX_IMAGE"
 echo "   - ✅ For ARM64 builds, run this script on an ARM64 Linux machine"
 echo "   - ✅ Build environment isolated in virtual environment: $VENV_DIR"
 echo "   - ✅ Test binaries on target systems before releasing"
-
-# Clean up temporary files
-echo ""
-echo "🔄 Cleaning up temporary files..."
-python3 release/transform_readme_temp.py --action cleanup
 
 # Fix ownership of any Docker-created files
 echo "🔧 Fixing ownership of Docker-created files..."
