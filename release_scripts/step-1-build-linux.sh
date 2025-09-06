@@ -64,11 +64,46 @@ if [[ -f README.md ]]; then
   trap 'if [[ -f "$READMETMP" ]]; then cp "$READMETMP" README.md 2>/dev/null || true; rm -f "$READMETMP"; fi' EXIT
 fi
 python3 scripts/transform_readme.py --target pypi || true
-maturin build \
-  --release --locked \
-  --target "$TARGET_TRIPLE" \
-  --out dist \
-  --compatibility manylinux_2_17
+if command -v docker >/dev/null 2>&1 && [[ -z "${NO_DOCKER:-}" ]]; then
+  echo "==> Using manylinux2014 Docker image for glibc 2.17 compliance"
+  if [[ "$ARCH" == "x86_64" ]]; then
+    MANYLINUX_IMAGE="quay.io/pypa/manylinux2014_x86_64"
+  else
+    MANYLINUX_IMAGE="quay.io/pypa/manylinux2014_aarch64"
+  fi
+
+  # Mount caches if available to speed up builds
+  CARGO_HOME_MOUNT=()
+  RUSTUP_HOME_MOUNT=()
+  [[ -d "$HOME/.cargo" ]] && CARGO_HOME_MOUNT=(-v "$HOME/.cargo:/root/.cargo")
+  [[ -d "$HOME/.rustup" ]] && RUSTUP_HOME_MOUNT=(-v "$HOME/.rustup:/root/.rustup")
+
+  docker run --rm -t \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD:/io" -w /io \
+    "${CARGO_HOME_MOUNT[@]}" "${RUSTUP_HOME_MOUNT[@]}" \
+    "$MANYLINUX_IMAGE" \
+    /bin/bash -lc '
+      set -euo pipefail;
+      # Install Rust and maturin inside the container
+      if ! command -v cargo >/dev/null 2>&1; then
+        curl https://sh.rustup.rs -sSf | sh -s -- -y;
+        export PATH=$HOME/.cargo/bin:$PATH;
+      else
+        export PATH=$HOME/.cargo/bin:$PATH;
+      fi;
+      python3 -m pip install -U pip;
+      python3 -m pip install "maturin>=1.9,<2";
+      maturin build --release --locked --target '"$TARGET_TRIPLE"' --out dist --compatibility manylinux_2_17;
+    '
+else
+  echo "==> Docker not available, building on host (may fail manylinux_2_17 audit)"
+  maturin build \
+    --release --locked \
+    --target "$TARGET_TRIPLE" \
+    --out dist \
+    --compatibility manylinux_2_17
+fi
 
 echo "==> Testing wheel"
 python3 -m pip install dist/${PACKAGE_NAME}-*.whl --force-reinstall
