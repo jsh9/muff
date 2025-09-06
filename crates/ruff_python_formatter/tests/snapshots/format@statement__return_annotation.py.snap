@@ -1,6 +1,7 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/return_annotation.py
+snapshot_kind: text
 ---
 ## Input
 ```python
@@ -204,47 +205,47 @@ def process_board_action(
 ```python
 # Handle comments on empty tuple return types.
 def zrevrangebylex(
-        self,
-        name: _Key,
-        max: _Value,
-        min: _Value,
-        start: int | None = None,
-        num: int | None = None,
+    self,
+    name: _Key,
+    max: _Value,
+    min: _Value,
+    start: int | None = None,
+    num: int | None = None,
 ) -> (  # type: ignore[override]
 ): ...
 
 
 def zrevrangebylex(
-        self,
-        name: _Key,
-        max: _Value,
-        min: _Value,
-        start: int | None = None,
-        num: int | None = None,
+    self,
+    name: _Key,
+    max: _Value,
+    min: _Value,
+    start: int | None = None,
+    num: int | None = None,
 ) -> (  # type: ignore[override]
     # comment
 ): ...
 
 
 def zrevrangebylex(
-        self,
-        name: _Key,
-        max: _Value,
-        min: _Value,
-        start: int | None = None,
-        num: int | None = None,
+    self,
+    name: _Key,
+    max: _Value,
+    min: _Value,
+    start: int | None = None,
+    num: int | None = None,
 ) -> (  # type: ignore[override]
     1
 ): ...
 
 
 def zrevrangebylex(
-        self,
-        name: _Key,
-        max: _Value,
-        min: _Value,
-        start: int | None = None,
-        num: int | None = None,
+    self,
+    name: _Key,
+    max: _Value,
+    min: _Value,
+    start: int | None = None,
+    num: int | None = None,
 ) -> (  # type: ignore[override]
     1,
     2,
@@ -252,30 +253,30 @@ def zrevrangebylex(
 
 
 def zrevrangebylex(
-        self,
-        name: _Key,
-        max: _Value,
-        min: _Value,
-        start: int | None = None,
-        num: int | None = None,
+    self,
+    name: _Key,
+    max: _Value,
+    min: _Value,
+    start: int | None = None,
+    num: int | None = None,
 ) -> (  # type: ignore[override]
     (1, 2)
 ): ...
 
 
 def handleMatch(  # type: ignore[override] # https://github.com/python/mypy/issues/10197
-        self, m: Match[str], data: str
+    self, m: Match[str], data: str
 ) -> Union[Tuple[None, None, None], Tuple[Element, int, int]]: ...
 
 
 def double(
-        a: int,  # Hello
+    a: int,  # Hello
 ) -> int:
     return 2 * a
 
 
 def double(
-        a: int,
+    a: int,
 ) -> (  # Hello
     int
 ):
@@ -283,7 +284,7 @@ def double(
 
 
 def double(
-        a: int,
+    a: int,
 ) -> (  # Hello
 ):
     return 2 * a
@@ -292,22 +293,22 @@ def double(
 # Breaking over parameters and return types. (Black adds a trailing comma when the
 # function arguments break here with a single argument; we do not.)
 def f(
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
 ) -> aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: ...
 
 
 def f(
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, a
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, a
 ) -> aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: ...
 
 
 def f(
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
 ) -> a: ...
 
 
 def f(
-        a,
+    a,
 ) -> (
     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ): ...
@@ -324,12 +325,12 @@ def f[
 
 
 def f[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa](
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
 ) -> aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: ...
 
 
 def f[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa](
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
 ) -> a: ...
 
 
@@ -356,21 +357,21 @@ def xxxxxxxxxxxxxxxxxxxxxxxxxxxx() -> Set[
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> Set[
     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ]: ...
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> Set[
     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ]: ...
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        *args,
+    *args,
 ) -> Set[
     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ]: ...
@@ -400,12 +401,12 @@ def xxxxxxxxxxxxxxxxxxxxxxxxxxxx() -> (
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx: ...
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> (
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ): ...
@@ -417,7 +418,7 @@ def xxxxxxxxxxxxxxxxxxxxxxxxxxxx() -> (
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> X + Y + foooooooooooooooooooooooooooooooooooo(): ...
 
 
@@ -427,7 +428,7 @@ def xxxxxxxxxxxxxxxxxxxxxxxxxxxx() -> (
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> X and Y and foooooooooooooooooooooooooooooooooooo(): ...
 
 
@@ -437,7 +438,7 @@ def xxxxxxxxxxxxxxxxxxxxxxxxxxxx() -> (
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> X | Y | foooooooooooooooooooooooooooooooooooo(): ...
 
 
@@ -447,7 +448,7 @@ def xxxxxxxxxxxxxxxxxxxxxxxxxxxx() -> (
 
 
 def xxxxxxxxxxxxxxxxxxxxxxxxxxxx(
-        x,
+    x,
 ) -> (
     X | Y | foooooooooooooooooooooooooooooooooooo()  # comment
 ): ...
@@ -461,7 +462,7 @@ def double() -> first_item and foo.bar.baz().bop(
 
 # Dangling comments on return annotations.
 def double(
-        a: int,
+    a: int,
 ) -> (
     int  # Hello
 ):
@@ -469,7 +470,7 @@ def double(
 
 
 def double(
-        a: int,
+    a: int,
 ) -> (
     foo.bar  # Hello
 ):
@@ -477,7 +478,7 @@ def double(
 
 
 def double(
-        a: int,
+    a: int,
 ) -> (
     [int]  # Hello
 ):
@@ -485,7 +486,7 @@ def double(
 
 
 def double(
-        a: int,
+    a: int,
 ) -> (
     int | list[int]  # Hello
 ):
@@ -493,7 +494,7 @@ def double(
 
 
 def double(
-        a: int,
+    a: int,
 ) -> (
     int
     | list[
@@ -504,7 +505,7 @@ def double(
 
 
 def process_board_action(
-        payload: WildValue, action_type: Optional[str]
+    payload: WildValue, action_type: Optional[str]
 ) -> Optional[Tuple[str, str]]:
     pass
 ```

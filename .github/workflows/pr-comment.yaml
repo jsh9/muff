@@ -13,7 +13,6 @@ on:
 jobs:
   comment:
     runs-on: ubuntu-latest
-    if: false  # Disabled - comment workflow not needed for muff fork
     permissions:
       pull-requests: write
     steps:
@@ -62,7 +61,7 @@ jobs:
           # subsequent runs
           echo '<!-- generated-comment ecosystem -->' >> comment.txt
 
-          echo '## `muff-ecosystem` results' >> comment.txt
+          echo '## `ruff-ecosystem` results' >> comment.txt
           cat pr/ecosystem/ecosystem-result >> comment.txt
           echo "" >> comment.txt
 

@@ -322,10 +322,10 @@ def simple():
         Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
     ):
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -352,10 +352,10 @@ def repeated():
         Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
     ):
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -366,7 +366,7 @@ def repeated():
             self.x = doit(5)
 
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -377,10 +377,10 @@ def repeated():
             self.x = doit(5)
 
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -391,7 +391,7 @@ def repeated():
             self.x = doit(5)
 
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -406,10 +406,10 @@ def repeated():
         Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
     ):
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -420,7 +420,7 @@ def repeated():
             self.x = doit(5)
 
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -431,10 +431,10 @@ def repeated():
             self.x = doit(5)
 
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -445,7 +445,7 @@ def repeated():
             self.x = doit(5)
 
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -472,10 +472,10 @@ def barely_exceeds_limit():
         Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
     ):
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is 89 columns, which is one
                 # more than the limit. Therefore, it should get wrapped for
@@ -504,10 +504,10 @@ def unindented():
         Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
     ):
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is just one character shy of
                 # tripping the default line width of 88. So it should not be
@@ -534,10 +534,10 @@ def unindented_barely_exceeds_limit():
         Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
     ):
         def abcdefghijklmnopqrstuvwxyz(
-                self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
         ):
             def abcdefghijklmnopqrstuvwxyz(
-                    abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
             ):
                 # For 4 space indents, this is 89 columns, which is one
                 # more than the limit. Therefore, it should get wrapped for
@@ -893,10 +893,10 @@ def simple():
     Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
   ):
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -923,10 +923,10 @@ def repeated():
     Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
   ):
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -937,7 +937,7 @@ def repeated():
       self.x = doit(5)
 
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -948,10 +948,10 @@ def repeated():
       self.x = doit(5)
 
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -962,7 +962,7 @@ def repeated():
       self.x = doit(5)
 
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -977,10 +977,10 @@ def repeated():
     Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
   ):
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -991,7 +991,7 @@ def repeated():
       self.x = doit(5)
 
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -1002,10 +1002,10 @@ def repeated():
       self.x = doit(5)
 
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -1016,7 +1016,7 @@ def repeated():
       self.x = doit(5)
 
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -1043,10 +1043,10 @@ def barely_exceeds_limit():
     Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
   ):
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is 89 columns, which is one
         # more than the limit. Therefore, it should get wrapped for
@@ -1073,10 +1073,10 @@ def unindented():
     Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
   ):
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is just one character shy of
         # tripping the default line width of 88. So it should not be
@@ -1103,10 +1103,10 @@ def unindented_barely_exceeds_limit():
     Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
   ):
     def abcdefghijklmnopqrstuvwxyz(
-        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+      self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
     ):
       def abcdefghijklmnopqrstuvwxyz(
-          abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+        abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
       ):
         # For 4 space indents, this is 89 columns, which is one
         # more than the limit. Therefore, it should get wrapped for
@@ -1439,10 +1439,10 @@ def simple():
 	    Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1469,10 +1469,10 @@ def repeated():
 	    Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1483,7 +1483,7 @@ def repeated():
 	        self.x = doit(5)
 
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1494,10 +1494,10 @@ def repeated():
 	        self.x = doit(5)
 
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1508,7 +1508,7 @@ def repeated():
 	        self.x = doit(5)
 
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1523,10 +1523,10 @@ def repeated():
 	    Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1537,7 +1537,7 @@ def repeated():
 	        self.x = doit(5)
 
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1548,10 +1548,10 @@ def repeated():
 	        self.x = doit(5)
 
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1562,7 +1562,7 @@ def repeated():
 	        self.x = doit(5)
 
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1589,10 +1589,10 @@ def barely_exceeds_limit():
 	    Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is 89 columns, which is one
 	            # more than the limit. Therefore, it should get wrapped for
@@ -1621,10 +1621,10 @@ def unindented():
 	    Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is just one character shy of
 	            # tripping the default line width of 88. So it should not be
@@ -1651,10 +1651,10 @@ def unindented_barely_exceeds_limit():
 	    Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	    def abcdefghijklmnopqrstuvwxyz(
-	            self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	        self, abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	    ):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
+	            abc, ddef, ghi, jkl, mno, pqr, stu, vwx, yz, a1, a2, a3, a4
 	        ):
 	            # For 4 space indents, this is 89 columns, which is one
 	            # more than the limit. Therefore, it should get wrapped for
@@ -2010,7 +2010,22 @@ def simple():
 	        Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2024,21 +2039,6 @@ def simple():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2080,7 +2080,22 @@ def repeated():
 	        Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2094,21 +2109,6 @@ def repeated():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2134,19 +2134,19 @@ def repeated():
 	                self.x = doit(5)
 
 	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
+	                        abc,
+	                        ddef,
+	                        ghi,
+	                        jkl,
+	                        mno,
+	                        pqr,
+	                        stu,
+	                        vwx,
+	                        yz,
+	                        a1,
+	                        a2,
+	                        a3,
+	                        a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2172,7 +2172,22 @@ def repeated():
 	                self.x = doit(5)
 
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2186,21 +2201,6 @@ def repeated():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2226,19 +2226,19 @@ def repeated():
 	                self.x = doit(5)
 
 	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
+	                        abc,
+	                        ddef,
+	                        ghi,
+	                        jkl,
+	                        mno,
+	                        pqr,
+	                        stu,
+	                        vwx,
+	                        yz,
+	                        a1,
+	                        a2,
+	                        a3,
+	                        a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2268,7 +2268,22 @@ def repeated():
 	        Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2282,21 +2297,6 @@ def repeated():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2322,19 +2322,19 @@ def repeated():
 	                self.x = doit(5)
 
 	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
+	                        abc,
+	                        ddef,
+	                        ghi,
+	                        jkl,
+	                        mno,
+	                        pqr,
+	                        stu,
+	                        vwx,
+	                        yz,
+	                        a1,
+	                        a2,
+	                        a3,
+	                        a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2360,7 +2360,22 @@ def repeated():
 	                self.x = doit(5)
 
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2374,21 +2389,6 @@ def repeated():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2414,19 +2414,19 @@ def repeated():
 	                self.x = doit(5)
 
 	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
+	                        abc,
+	                        ddef,
+	                        ghi,
+	                        jkl,
+	                        mno,
+	                        pqr,
+	                        stu,
+	                        vwx,
+	                        yz,
+	                        a1,
+	                        a2,
+	                        a3,
+	                        a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2468,7 +2468,22 @@ def barely_exceeds_limit():
 	        Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2482,21 +2497,6 @@ def barely_exceeds_limit():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is 89 columns, which is one
 	                        # more than the limit. Therefore, it should get wrapped for
@@ -2538,7 +2538,22 @@ def unindented():
 	        Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2552,21 +2567,6 @@ def unindented():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is just one character shy of
 	                        # tripping the default line width of 88. So it should not be
@@ -2608,7 +2608,22 @@ def unindented_barely_exceeds_limit():
 	        Abc, Def, Ghi, Jkl, Mno, Pqr, Stu, Vwx, Yz, A1, A2, A3, A4, A5
 	):
 	        def abcdefghijklmnopqrstuvwxyz(
-	                        self,
+	                self,
+	                abc,
+	                ddef,
+	                ghi,
+	                jkl,
+	                mno,
+	                pqr,
+	                stu,
+	                vwx,
+	                yz,
+	                a1,
+	                a2,
+	                a3,
+	                a4,
+	        ):
+	                def abcdefghijklmnopqrstuvwxyz(
 	                        abc,
 	                        ddef,
 	                        ghi,
@@ -2622,21 +2637,6 @@ def unindented_barely_exceeds_limit():
 	                        a2,
 	                        a3,
 	                        a4,
-	        ):
-	                def abcdefghijklmnopqrstuvwxyz(
-	                                abc,
-	                                ddef,
-	                                ghi,
-	                                jkl,
-	                                mno,
-	                                pqr,
-	                                stu,
-	                                vwx,
-	                                yz,
-	                                a1,
-	                                a2,
-	                                a3,
-	                                a4,
 	                ):
 	                        # For 4 space indents, this is 89 columns, which is one
 	                        # more than the limit. Therefore, it should get wrapped for
@@ -2680,7 +2680,7 @@ def doctest_extra_indent1():
 	...                 self._df = df
 	...
 	...         def by_first_letter_of_column_values(
-	...                         self, col: str
+	...                 self, col: str
 	...         ) -> list[pl.DataFrame]:
 	...                 return [
 	...                         self._df.filter(pl.col(col).str.starts_with(c))

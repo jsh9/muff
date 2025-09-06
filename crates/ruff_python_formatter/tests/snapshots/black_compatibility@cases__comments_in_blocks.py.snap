@@ -1,6 +1,7 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/comments_in_blocks.py
+snapshot_kind: text
 ---
 ## Input
 
@@ -146,15 +147,6 @@ if (
      # b comment
      None
  )
-@@ -71,7 +70,7 @@
- 
- 
- def get_subtree_proof_nodes(
--    chunk_index_groups: Sequence[Tuple[int, ...], ...],
-+        chunk_index_groups: Sequence[Tuple[int, ...], ...],
- ) -> Tuple[int, ...]:
-     subtree_node_paths = (
-         # We take a candidate element from each group and shift it to
 ```
 
 ## Ruff Output
@@ -232,7 +224,7 @@ def convert(collection):
 
 
 def get_subtree_proof_nodes(
-        chunk_index_groups: Sequence[Tuple[int, ...], ...],
+    chunk_index_groups: Sequence[Tuple[int, ...], ...],
 ) -> Tuple[int, ...]:
     subtree_node_paths = (
         # We take a candidate element from each group and shift it to

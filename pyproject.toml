@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "muff"
-version = "0.12.11.1"
-description = "An extremely fast Python linter and code formatter (fork of Ruff), written in Rust."
+version = "0.12.12"
+description = "An extremely fast Python linter and code formatter, written in Rust."
 authors = [{ name = "Astral Software Inc.", email = "hey@astral.sh" }]
 readme = "README.md"
 requires-python = ">=3.7"
@@ -46,7 +46,7 @@ Changelog = "https://github.com/astral-sh/ruff/blob/main/CHANGELOG.md"
 [tool.maturin]
 bindings = "bin"
 manifest-path = "crates/ruff/Cargo.toml"
-module-name = "muff"
+module-name = "ruff"
 python-source = "python"
 strip = true
 exclude = [

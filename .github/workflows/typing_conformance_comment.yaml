@@ -13,7 +13,6 @@ on: # zizmor: ignore[dangerous-triggers]
 jobs:
   comment:
     runs-on: ubuntu-24.04
-    if: false  # Disabled - comment workflow not needed for muff fork
     permissions:
       pull-requests: write
     steps:

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
 use pretty_assertions::StrComparison;
 
-use muff::args;
+use ruff::args;
 
 use crate::ROOT_DIR;
 use crate::generate_all::{Mode, REGENERATE_ALL_COMMAND};

@@ -1,6 +1,7 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/return_type_parameters.py
+snapshot_kind: text
 ---
 ## Input
 ```python
@@ -218,7 +219,7 @@ def parameters_string_return_type(a) -> "ALongIdentifierButDoesntGetParenthesize
 
 # String return type that exceeds the line length
 def parameters_overlong_string_return_type(
-        a,
+    a,
 ) -> "ALongIdentifierButDoesntGetParenthesized":
     pass
 
@@ -230,7 +231,7 @@ def parameters_name_return_type(a) -> ALongIdentifierButDoesntGetParenthesized:
 
 # Name return type that exceeds the configured line width
 def parameters_overlong_name_return_type(
-        a,
+    a,
 ) -> ALongIdentifierButDoesntGetParenthesized:
     pass
 
@@ -241,13 +242,13 @@ def parameters_overlong_name_return_type(
 
 
 def test_return_overlong_union(
-        a,
+    a,
 ) -> A | B | C | DDDDDDDDDDDDDDDDDDDDDDDD | EEEEEEEEEEEEEEEEEEEEEE:
     pass
 
 
 def test_return_union_with_elements_exceeding_length(
-        a,
+    a,
 ) -> (
     A
     | B
@@ -264,7 +265,7 @@ def test_return_union_with_elements_exceeding_length(
 
 
 def test_return_multiline_string_type_annotation(
-        a,
+    a,
 ) -> """str
     | list[str]
 """:
@@ -272,7 +273,7 @@ def test_return_multiline_string_type_annotation(
 
 
 def test_return_multiline_string_binary_expression_return_type_annotation(
-        a,
+    a,
 ) -> (
     """str
     | list[str]
@@ -292,13 +293,13 @@ def test_implicit_concatenated_string_return_type(a) -> "strbbbbbbbbbbbbbbbb":
 
 
 def test_overlong_implicit_concatenated_string_return_type(
-        a,
+    a,
 ) -> "liiiiiiiiiiiisssssst[str]bbbbbbbbbbbbbbbb":
     pass
 
 
 def test_extralong_implicit_concatenated_string_return_type(
-        a,
+    a,
 ) -> (
     "liiiiiiiiiiiisssssst[str]"
     "bbbbbbbbbbbbbbbbbbbb"
@@ -316,13 +317,13 @@ def parameters_subscript_return_type(a) -> list[str]:
 
 # Unlike with no-parameters, the return type gets never parenthesized.
 def parameters_overlong_subscript_return_type_with_single_element(
-        a,
+    a,
 ) -> list[xxxxxxxxxxxxxxxxxxxxx]:
     pass
 
 
 def parameters_subscript_return_type_multiple_elements(
-        a,
+    a,
 ) -> list[
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ]:
@@ -330,7 +331,7 @@ def parameters_subscript_return_type_multiple_elements(
 
 
 def parameters_subscript_return_type_multiple_overlong_elements(
-        a,
+    a,
 ) -> list[
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,
@@ -339,7 +340,7 @@ def parameters_subscript_return_type_multiple_overlong_elements(
 
 
 def parameters_subscriptreturn_type_with_overlong_value_(
-        a,
+    a,
 ) -> liiiiiiiiiiiiiiiiiiiiist[
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ]:
@@ -347,7 +348,7 @@ def parameters_subscriptreturn_type_with_overlong_value_(
 
 
 def parameters_overlong_subscript_return_type_with_overlong_single_element(
-        a,
+    a,
 ) -> list[
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ]:
@@ -377,7 +378,7 @@ def a():
                                                                             def t():
                                                                                 def u():
                                                                                     def thiiiiiiiiiiiiiiiiiis_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiis_veeeeeeeeeeedooooong(
-                                                                                            a,
+                                                                                        a,
                                                                                     ) -> list[
                                                                                         int,
                                                                                         float,
@@ -391,7 +392,7 @@ def a():
 
 # Black only splits the return type. Ruff also breaks the parameters. This is probably a bug.
 def parameters_subscriptreturn_type_with_overlong_value_(
-        a,
+    a,
 ) -> liiiiiiiiiiiiiiiiiiiiist[
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,
     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,
@@ -405,7 +406,7 @@ def parameters_subscriptreturn_type_with_overlong_value_(
 
 
 def test_return_multiline_string_binary_expression_return_type_annotation(
-        a,
+    a,
 ) -> aaaaaaaaaaaaaaaaaaaaaaaaaa > [
     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
     bbbbbbbbbbbbbbbbbbbbbbbbb,

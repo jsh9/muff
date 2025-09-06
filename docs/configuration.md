@@ -521,20 +521,20 @@ See `ruff help` for the full list of Ruff's top-level commands:
 <!-- Begin auto-generated command help. -->
 
 ```text
-Muff: An extremely fast Python linter and code formatter (fork of Ruff).
+Ruff: An extremely fast Python linter and code formatter.
 
-Usage: muff [OPTIONS] <COMMAND>
+Usage: ruff [OPTIONS] <COMMAND>
 
 Commands:
-  check    Run Muff on the given files or directories
+  check    Run Ruff on the given files or directories
   rule     Explain a rule (or all rules)
   config   List or describe the available configuration options
   linter   List all supported upstream linters
   clean    Clear any caches in the current directory and any subdirectories
-  format   Run the Muff formatter on the given files or directories
+  format   Run the Ruff formatter on the given files or directories
   server   Run the language server
   analyze  Run analysis over Python source code
-  version  Display Muff's version
+  version  Display Ruff's version
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -558,7 +558,7 @@ Global options:
       --isolated
           Ignore all configuration files
 
-For help with a specific command, see: `muff help <command>`.
+For help with a specific command, see: `ruff help <command>`.
 ```
 
 <!-- End auto-generated command help. -->
@@ -568,9 +568,9 @@ Or `ruff help check` for more on the linting command:
 <!-- Begin auto-generated check help. -->
 
 ```text
-Run Muff on the given files or directories
+Run Ruff on the given files or directories
 
-Usage: muff check [OPTIONS] [FILES]...
+Usage: ruff check [OPTIONS] [FILES]...
 
 Arguments:
   [FILES]...  List of files or directories to check [default: .]
@@ -621,9 +621,9 @@ Options:
       --add-noqa
           Enable automatic additions of `noqa` directives to failing lines
       --show-files
-          See the files Muff will be run against with the current settings
+          See the files Ruff will be run against with the current settings
       --show-settings
-          See the settings Muff will use to lint a given Python file
+          See the settings Ruff will use to lint a given Python file
   -h, --help
           Print help
 
@@ -661,7 +661,7 @@ File selection:
           Respect file exclusions via `.gitignore` and other standard ignore
           files. Use `--no-respect-gitignore` to disable
       --force-exclude
-          Enforce exclusions, even for paths passed to Muff directly on the
+          Enforce exclusions, even for paths passed to Ruff directly on the
           command-line. Use `--no-force-exclude` to disable
 
 Miscellaneous:
@@ -702,9 +702,9 @@ Or `ruff help format` for more on the formatting command:
 <!-- Begin auto-generated format help. -->
 
 ```text
-Run the Muff formatter on the given files or directories
+Run the Ruff formatter on the given files or directories
 
-Usage: muff format [OPTIONS] [FILES]...
+Usage: ruff format [OPTIONS] [FILES]...
 
 Arguments:
   [FILES]...  List of files or directories to format [default: .]
@@ -748,14 +748,14 @@ File selection:
       --exclude <FILE_PATTERN>
           List of paths, used to omit files and/or directories from analysis
       --force-exclude
-          Enforce exclusions, even for paths passed to Muff directly on the
+          Enforce exclusions, even for paths passed to Ruff directly on the
           command-line. Use `--no-force-exclude` to disable
 
 Format configuration:
       --line-length <LINE_LENGTH>  Set the line-length
 
 Editor options:
-      --range <RANGE>  When specified, Muff will try to only format the code in
+      --range <RANGE>  When specified, Ruff will try to only format the code in
                        the given range.
                        It might be necessary to extend the start backwards or
                        the end forwards, to fully enclose a logical line.

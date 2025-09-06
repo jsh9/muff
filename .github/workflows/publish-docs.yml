@@ -20,7 +20,6 @@ on:
 jobs:
   mkdocs:
     runs-on: ubuntu-latest
-    if: false  # Disabled - documentation not needed for muff fork
     env:
       MKDOCS_INSIDERS_SSH_KEY_EXISTS: ${{ secrets.MKDOCS_INSIDERS_SSH_KEY != '' }}
     steps:
