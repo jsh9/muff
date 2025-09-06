@@ -32,6 +32,9 @@ tracing-flamegraph.svg
 # insta
 *.rs.pending-snap
 
+# Local release artifacts
+artifacts/
+
 
 ###
 # Rust.gitignore

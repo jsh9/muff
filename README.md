@@ -1,3 +1,58 @@
+# Muff
+
+This is a fork of [Ruff](https://github.com/astral-sh/ruff).
+
+The only difference between Muff and Ruff is the Python formatter's level of indentation in function arguments.
+
+Ruff indents 4 spaces for function arguments:
+
+```
+def my_function(
+    my_function_arg_1,
+    my_function_arg_2,
+    my_function_arg_3,
+    my_function_arg_4,
+):
+    pass
+```
+
+And Muff adds an extra level of indentation:
+
+```
+def my_function(
+        my_function_arg_1,
+        my_function_arg_2,
+        my_function_arg_3,
+        my_function_arg_4,
+):
+    pass
+```
+
+This greatly improves readability, especially when syntax highlighting isn't available (such as in stack traces).
+
+In fact, [PEP-8 recommends this style](https://peps.python.org/pep-0008/#indentation), saying that "Add 4 spaces (an extra level of indentation) to distinguish arguments from the rest."
+
+Currently (August 2025) there is [a 1.8-year-old open issue(https://github.com/astral-sh/ruff/issues/8360) in Ruff to request this formatting style. There are no known timeline for this issue, which is why I created this fork.
+
+If/when that issue gets implemented and merged, I will deprecate this fork.
+
+### How to use `muff`
+
+Via command line:
+```bash
+muff format --line-length 79 --config "format.quote-style='single'" --config "format.docstring-code-format=true" <FILE_PATH>
+```
+
+Via config file:
+```bash
+muff format --config=muff.toml <FILE_PATH>
+```
+Note: `muff` will try to find `ruff.toml` (rather than `muff.toml`)
+if you don't specify the config file.
+
+-----------------
+## Below is the original README of Ruff:
+
 <!-- Begin section: Overview -->
 
 # Ruff
