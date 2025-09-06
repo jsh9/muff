@@ -1,49 +1,5 @@
 MIT License
 
-Copyright (c) 2025 jsh9
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-end of terms and conditions
-
-================================================================================
-
-ATTRIBUTION NOTICE:
-
-This software is based on Ruff (https://github.com/astral-sh/ruff), created by
-Charles Marsh and the Ruff contributors. The original Ruff software is licensed
-under the MIT License.
-
-Muff includes modifications to the original Ruff codebase, specifically:
-- Function parameter indentation changed from 4 spaces to 8 spaces
-- Binary name changed from "ruff" to "muff"
-- CLI help text updated to reference "Muff"
-
-All other functionality remains substantially the same as the original Ruff.
-
-For the complete list of Ruff contributors, see:
-https://github.com/astral-sh/ruff/graphs/contributors
-
-================================================================================
-
-Here is the original Ruff licence:
-
 Copyright (c) 2022 Charles Marsh
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -239,8 +195,8 @@ are:
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
   """
 
 - pygrep-hooks, licensed as follows:

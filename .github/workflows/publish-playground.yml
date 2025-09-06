@@ -21,7 +21,6 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: false  # Disabled - playground not needed for muff fork
     env:
       CF_API_TOKEN_EXISTS: ${{ secrets.CF_API_TOKEN != '' }}
     steps:

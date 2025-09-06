@@ -1,6 +1,7 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/type_param_defaults.py
+snapshot_kind: text
 ---
 ## Input
 
@@ -47,7 +48,7 @@ def trailing_comma2[T=int](a: str,):
 -    T = something_that_is_long
 -](short1: int, short2: str, short3: bytes) -> float:
 +def simple[T = something_that_is_long](
-+        short1: int, short2: str, short3: bytes
++    short1: int, short2: str, short3: bytes
 +) -> float:
      pass
  
@@ -56,7 +57,7 @@ def trailing_comma2[T=int](a: str,):
 -    something_that_is_long = something_that_is_long
 -](something_that_is_long: something_that_is_long) -> something_that_is_long:
 +def longer[something_that_is_long = something_that_is_long](
-+        something_that_is_long: something_that_is_long,
++    something_that_is_long: something_that_is_long,
 +) -> something_that_is_long:
      pass
  
@@ -69,7 +70,7 @@ def trailing_comma2[T=int](a: str,):
 -    T = int
 -](a: str,):
 +def trailing_comma2[T = int](
-+        a: str,
++    a: str,
 +):
      pass
 ```
@@ -93,13 +94,13 @@ type something_that_is_long[something_that_is_long = something_that_is_long] = (
 
 
 def simple[T = something_that_is_long](
-        short1: int, short2: str, short3: bytes
+    short1: int, short2: str, short3: bytes
 ) -> float:
     pass
 
 
 def longer[something_that_is_long = something_that_is_long](
-        something_that_is_long: something_that_is_long,
+    something_that_is_long: something_that_is_long,
 ) -> something_that_is_long:
     pass
 
@@ -111,7 +112,7 @@ def trailing_comma1[
 
 
 def trailing_comma2[T = int](
-        a: str,
+    a: str,
 ):
     pass
 ```

@@ -1,6 +1,7 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/black/cases/allow_empty_first_line.py
+snapshot_kind: text
 ---
 ## Input
 
@@ -155,14 +156,9 @@ def top_level(
          pass
  
  
-@@ -73,9 +61,8 @@
- 
- 
- def top_level(
--    a: int,
--    b: str,
-+        a: int,
-+        b: str,
+@@ -76,6 +64,5 @@
+     a: int,
+     b: str,
  ) -> Whatever[Generic, Something]:
 -
      def nested(x: int) -> int:
@@ -235,8 +231,8 @@ async def async_fn():
 
 
 def top_level(
-        a: int,
-        b: str,
+    a: int,
+    b: str,
 ) -> Whatever[Generic, Something]:
     def nested(x: int) -> int:
         pass

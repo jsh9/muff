@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use muff::{args::GlobalConfigArgs, check};
+use ruff::{args::GlobalConfigArgs, check};
 use ruff_linter::logging::set_up_logging;
 use std::process::ExitCode;
 
@@ -71,7 +71,7 @@ enum Command {
     /// Run a ruff command n times for profiling/benchmarking
     Repeat {
         #[clap(flatten)]
-        args: muff::args::CheckCommand,
+        args: ruff::args::CheckCommand,
         /// Run this many times
         #[clap(long)]
         repeat: usize,

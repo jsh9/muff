@@ -20,9 +20,9 @@ use path_absolutize::path_dedot;
 use tempfile::TempDir;
 
 #[cfg(unix)]
-use muff::args::Args;
+use ruff::args::Args;
 #[cfg(unix)]
-use muff::run;
+use ruff::run;
 
 const BIN_NAME: &str = "ruff";
 

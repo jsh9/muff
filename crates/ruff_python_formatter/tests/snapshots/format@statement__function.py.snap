@@ -1,6 +1,7 @@
 ---
 source: crates/ruff_python_formatter/tests/fixtures.rs
 input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/function.py
+snapshot_kind: text
 ---
 ## Input
 ```python
@@ -582,10 +583,10 @@ def test(
 
 # Argument empty line spacing
 def test(
-        # comment
-        a,
-        # another
-        b,
+    # comment
+    a,
+    # another
+    b,
 ): ...
 
 
@@ -597,30 +598,26 @@ def single_line(aaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbb, cccccccccccccccc
 
 
 def arguments_on_their_own_line(
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
-        bbbbbbbbbbbbbbb,
-        ccccccccccc,
-        ddddddddddddd,
-        eeeeeee,
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbb, ccccccccccc, ddddddddddddd, eeeeeee
 ):
     pass
 
 
 def argument_per_line(
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
-        bbbbbbbbbbbbbbb,
-        ccccccccccccccccc,
-        ddddddddddddd,
-        eeeeeeeeeeeeeeee,
-        ffffffffffff,
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    bbbbbbbbbbbbbbb,
+    ccccccccccccccccc,
+    ddddddddddddd,
+    eeeeeeeeeeeeeeee,
+    ffffffffffff,
 ):
     pass
 
 
 def last_pos_only_trailing_comma(
-        a,
-        b,
-        /,
+    a,
+    b,
+    /,
 ):
     pass
 
@@ -630,35 +627,35 @@ def last_pos_no_trailing_comma(a, b, /):
 
 
 def varg_with_leading_comments(
-        a,
-        b,
-        # comment
-        *args,
+    a,
+    b,
+    # comment
+    *args,
 ): ...
 
 
 def kwarg_with_leading_comments(
-        a,
-        b,
-        # comment
-        **kwargs,
+    a,
+    b,
+    # comment
+    **kwargs,
 ): ...
 
 
 def argument_with_long_default(
-        a,
-        b=ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        + [dddddddddddddddddddd, eeeeeeeeeeeeeeeeeeee, ffffffffffffffffffffffff],
-        h=[],
+    a,
+    b=ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    + [dddddddddddddddddddd, eeeeeeeeeeeeeeeeeeee, ffffffffffffffffffffffff],
+    h=[],
 ): ...
 
 
 def argument_with_long_type_annotation(
-        a,
-        b: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        | yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
-        | zzzzzzzzzzzzzzzzzzz = [0, 1, 2, 3],
-        h=[],
+    a,
+    b: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    | yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+    | zzzzzzzzzzzzzzzzzzz = [0, 1, 2, 3],
+    h=[],
 ): ...
 
 
@@ -761,133 +758,133 @@ def f(arg1=1, *, kwonlyarg1, kwonlyarg2=2):
 
 # Regression test for https://github.com/astral-sh/ruff/issues/5176#issuecomment-1598171989
 def foo(
-        b=3 + 2,  # comment
+    b=3 + 2,  # comment
 ): ...
 
 
 # Comments on the slash or the star, both of which don't have a node
 def f11(
-        a,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
-        b,
+    a,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
+    b,
 ):
     pass
 
 
 def f12(
-        a=1,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
-        b=2,
+    a=1,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
+    b=2,
 ):
     pass
 
 
 def f13(
-        a,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
+    a,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
 ):
     pass
 
 
 def f21(
-        a=1,
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        b=2,
+    a=1,
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    b=2,
 ):
     pass
 
 
 def f22(
-        a,
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        b,
+    a,
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    b,
 ):
     pass
 
 
 def f23(
-        a,
-        # keyword only comment, leading
-        *args,  # keyword only comment, trailing
-        b,
+    a,
+    # keyword only comment, leading
+    *args,  # keyword only comment, trailing
+    b,
 ):
     pass
 
 
 def f24(
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        a,
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    a,
 ):
     pass
 
 
 def f31(
-        a=1,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
-        b=2,
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        c=3,
+    a=1,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
+    b=2,
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    c=3,
 ):
     pass
 
 
 def f32(
-        a,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
-        b,
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        c,
+    a,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
+    b,
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    c,
 ):
     pass
 
 
 def f33(
-        a,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
-        # keyword only comment, leading
-        *args,  # keyword only comment, trailing
-        c,
+    a,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
+    # keyword only comment, leading
+    *args,  # keyword only comment, trailing
+    c,
 ):
     pass
 
 
 def f34(
-        a,
-        # positional only comment, leading
-        /,  # positional only comment, trailing
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        c,
+    a,
+    # positional only comment, leading
+    /,  # positional only comment, trailing
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    c,
 ):
     pass
 
 
 def f35(
-        # keyword only comment, leading
-        *,  # keyword only comment, trailing
-        c,
+    # keyword only comment, leading
+    *,  # keyword only comment, trailing
+    c,
 ):
     pass
 
 
 # Multiple trailing comments
 def f41(
-        a,
-        /,  # 1  # 2
-        # 3
-        *,  # 4  # 5
-        c,
+    a,
+    /,  # 1  # 2
+    # 3
+    *,  # 4  # 5
+    c,
 ):
     pass
 
@@ -895,135 +892,135 @@ def f41(
 # Multiple trailing comments strangely places. The goal here is only stable formatting,
 # the comments are placed to strangely to keep their relative position intact
 def f42(
-        a,
-        /,  # 1
-        # 2
-        # 3
-        # 4
-        *,  # 5  # 7
-        # 6
-        c,
+    a,
+    /,  # 1
+    # 2
+    # 3
+    # 4
+    *,  # 5  # 7
+    # 6
+    c,
 ):
     pass
 
 
 # Regression test for https://github.com/astral-sh/ruff/issues/10281
 def f43(
-        __bar: str,
-        /,
-        **specifiers: typing.Any,  # noqa: ANN401
+    __bar: str,
+    /,
+    **specifiers: typing.Any,  # noqa: ANN401
 ) -> int:
     return len(specifiers)
 
 
 # Check trailing commas are permitted in funcdef argument list.
 def f(
-        a,
+    a,
 ):
     pass
 
 
 def f(
-        *args,
+    *args,
 ):
     pass
 
 
 def f(
-        **kwds,
+    **kwds,
 ):
     pass
 
 
 def f(
-        a,
-        *args,
+    a,
+    *args,
 ):
     pass
 
 
 def f(
-        a,
-        **kwds,
+    a,
+    **kwds,
 ):
     pass
 
 
 def f(
-        *args,
-        b,
+    *args,
+    b,
 ):
     pass
 
 
 def f(
-        *,
-        b,
+    *,
+    b,
 ):
     pass
 
 
 def f(
-        *args,
-        **kwds,
+    *args,
+    **kwds,
 ):
     pass
 
 
 def f(
-        a,
-        *args,
-        b,
+    a,
+    *args,
+    b,
 ):
     pass
 
 
 def f(
-        a,
-        *,
-        b,
+    a,
+    *,
+    b,
 ):
     pass
 
 
 def f(
-        a,
-        *args,
-        **kwds,
+    a,
+    *args,
+    **kwds,
 ):
     pass
 
 
 def f(
-        *args,
-        b,
-        **kwds,
+    *args,
+    b,
+    **kwds,
 ):
     pass
 
 
 def f(
-        *,
-        b,
-        **kwds,
+    *,
+    b,
+    **kwds,
 ):
     pass
 
 
 def f(
-        a,
-        *args,
-        b,
-        **kwds,
+    a,
+    *args,
+    b,
+    **kwds,
 ):
     pass
 
 
 def f(
-        a,
-        *,
-        b,
-        **kwds,
+    a,
+    *,
+    b,
+    **kwds,
 ):
     pass
 
@@ -1047,55 +1044,55 @@ def f(  # first
 
 
 def f(
-        a,
-        /,
-        # first
-        b,
-        # second
+    a,
+    /,
+    # first
+    b,
+    # second
 ): ...
 
 
 def f(  # first
-        *,
-        # second
-        b,
-        # third
+    *,
+    # second
+    b,
+    # third
 ): ...
 
 
 def f(  # first
-        # second
-        *,
-        # third
-        b,
-        # fourth
+    # second
+    *,
+    # third
+    b,
+    # fourth
 ): ...
 
 
 def f(  # first
-        a,
-        # second
+    a,
+    # second
 ):  # third
     ...
 
 
 def f(  # first
-        a,
+    a,
 ):  # second
     ...
 
 
 def f(  # first
-        a,
-        # second
+    a,
+    # second
 ):  # third
     ...
 
 
 def f(  # first
-        a,
-        # third
-        /,  # second
+    a,
+    # third
+    /,  # second
 ): ...
 
 
@@ -1119,39 +1116,39 @@ except ImportError:
 
 # https://github.com/astral-sh/ruff/issues/7603
 def default_arg_comments(
-        a: str =  # a
-        "a",
-        b: str =
-        # b
-        "b",
-        c: str = (  # c
-            "c"
-        ),
-        d: str = (
-            # d
-            "d"
-        ),
+    a: str =  # a
+    "a",
+    b: str =
+    # b
+    "b",
+    c: str = (  # c
+        "c"
+    ),
+    d: str = (
+        # d
+        "d"
+    ),
 ):
     print(a, b, c, d)
 
 
 def default_arg_comments2(  #
-        x: int =  # =  #
-        #
-        123,  #
-        #
+    x: int =  # =  #
+    #
+    123,  #
+    #
 ):
     print(x)
 
 
 def function_with_one_argument_and_a_positional_separator(
-        argument: str, /
+    argument: str, /
 ) -> ReallyReallyReallyReallyReallyReallyReallyReallyLongName:
     pass
 
 
 def function_with_one_argument_and_a_keyword_separator(
-        *, argument: str
+    *, argument: str
 ) -> ReallyReallyReallyReallyReallyReallyReallyReallyLongName:
     pass
 
@@ -1160,17 +1157,17 @@ def function_with_one_argument_and_a_keyword_separator(
 # https://peps.python.org/pep-0646/#change-2-args-as-a-typevartuple
 def function_with_variadic_generics(*args: *tuple[int]): ...
 def function_with_variadic_generics(
-        *args: *tuple[int],
+    *args: *tuple[int],
 ): ...
 
 
 # Generic arguments (PEP 695)
 def func[T](
-        lotsoflongargs: T,
-        lotsoflongargs2: T,
-        lotsoflongargs3: T,
-        lotsoflongargs4: T,
-        lotsoflongargs5: T,
+    lotsoflongargs: T,
+    lotsoflongargs2: T,
+    lotsoflongargs3: T,
+    lotsoflongargs4: T,
+    lotsoflongargs5: T,
 ) -> T: ...
 
 
@@ -1202,124 +1199,124 @@ def foo(x: S) -> S: ...
 
 # Regression tests for https://github.com/astral-sh/ruff/issues/13369
 def foo(
-        arg: (  # comment with non-return annotation
-            int
-            # comment with non-return annotation
-        ),
+    arg: (  # comment with non-return annotation
+        int
+        # comment with non-return annotation
+    ),
 ):
     pass
 
 
 def foo(
-        arg: (  # comment with non-return annotation
-            int | range | memoryview
-            # comment with non-return annotation
-        ),
+    arg: (  # comment with non-return annotation
+        int | range | memoryview
+        # comment with non-return annotation
+    ),
 ):
     pass
 
 
 def foo(
-        arg: (
-            int
-            # only after
-        ),
+    arg: (
+        int
+        # only after
+    ),
 ):
     pass
 
 
 # Asserts that "incorrectly" placed comments don't *move* by fixing https://github.com/astral-sh/ruff/issues/13369
 def foo(
-        # comment with non-return annotation
-        # comment with non-return annotation
-        arg: (int),
+    # comment with non-return annotation
+    # comment with non-return annotation
+    arg: (int),
 ):
     pass
 
 
 # Comments between *args and **kwargs
 def args_no_type_annotation(
-        # comment
-        *args,
+    # comment
+    *args,
 ):
     pass
 
 
 def args_type_annotation(
-        # comment
-        *args: int,
+    # comment
+    *args: int,
 ):
     pass
 
 
 def args_trailing_end_of_line_comment(
-        # comment
-        *args,
+    # comment
+    *args,
 ):
     pass
 
 
 def args_blank_line_comment(
-        # comment
-        *args,
+    # comment
+    *args,
 ):
     pass
 
 
 def args_with_leading_parameter_comment(
-        # What comes next are arguments
-        # with an inline comment
-        *args,
+    # What comes next are arguments
+    # with an inline comment
+    *args,
 ):
     pass
 
 
 def kargs_no_type_annotation(
-        # comment
-        **kwargs,
+    # comment
+    **kwargs,
 ):
     pass
 
 
 def kwargs_type_annotation(
-        # comment
-        **kwargs: int,
+    # comment
+    **kwargs: int,
 ):
     pass
 
 
 def args_many_comments(
-        # before
-        # between * and name
-        *args,  # trailing args
-        # after name
+    # before
+    # between * and name
+    *args,  # trailing args
+    # after name
 ):
     pass
 
 
 def args_many_comments_with_type_annotation(
-        # before
-        # between * and name
-        # trailing args
-        # before colon
-        *args:
-        # after colon
-        # before type
-        int,  # trailing type
-        # after type
+    # before
+    # between * and name
+    # trailing args
+    # before colon
+    *args:
+    # after colon
+    # before type
+    int,  # trailing type
+    # after type
 ):
     pass
 
 
 def args_with_type_annotations_no_after_colon_comment(
-        # before
-        # between * and name
-        # trailing args
-        # before colon
-        *args:
-        # before type
-        int,  # trailing type
-        # after type
+    # before
+    # between * and name
+    # trailing args
+    # before colon
+    *args:
+    # before type
+    int,  # trailing type
+    # after type
 ):
     pass
 ```
@@ -1329,7 +1326,7 @@ def args_with_type_annotations_no_after_colon_comment(
 ```diff
 --- Stable
 +++ Preview
-@@ -165,6 +165,7 @@
+@@ -161,6 +161,7 @@
  
      def f1():
          pass  # a
@@ -1337,7 +1334,7 @@ def args_with_type_annotations_no_after_colon_comment(
  else:
      pass
  
-@@ -174,6 +175,7 @@
+@@ -170,6 +171,7 @@
      def f2():
          pass
          # a
