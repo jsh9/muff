@@ -8,7 +8,7 @@ import sysconfig
 def find_ruff_bin() -> str:
     """Return the ruff binary path."""
 
-    ruff_exe = "ruff" + sysconfig.get_config_var("EXE")
+    ruff_exe = "muff" + sysconfig.get_config_var("EXE")
 
     scripts_path = os.path.join(sysconfig.get_path("scripts"), ruff_exe)
     if os.path.isfile(scripts_path):

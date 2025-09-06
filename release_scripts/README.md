@@ -10,8 +10,10 @@ Provided scripts
 - `step-3-publish-to-pypi.sh`: Publish wheels/sdists to PyPI.
 
 Artifacts produced (step 1)
-- Wheels under `dist/` for package `muff` (module and binary name remain `ruff`).
-- Standalone binary archives: `ruff-<target>.tar.gz` (Linux/macOS) or `ruff-<target>.zip` (Windows) plus a `.sha256` checksum.
+- Wheels under `dist/` for package `muff`.
+- Console command installed by the wheel: `muff` (Python module remains `ruff`).
+- Standalone binary archives: `muff-<target>.tar.gz` (Linux/macOS) or `muff-<target>.zip` (Windows) plus a `.sha256` checksum. The binary inside is `muff`.
+- Location: Archives are written to `artifacts/` (configurable via `ARTIFACTS_DIR`). Wheels remain in `dist/`.
 
 Prerequisites
 - Python (via Anaconda):

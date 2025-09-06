@@ -32,7 +32,16 @@ if [[ -z "$TAG" ]]; then
 fi
 
 if [[ ${#ASSETS[@]} -eq 0 ]]; then
-  ASSETS=(ruff-*.tar.gz ruff-*.zip ruff-*.tar.gz.sha256 ruff-*.zip.sha256)
+  ASSETS=(
+    muff-*.tar.gz
+    muff-*.zip
+    muff-*.tar.gz.sha256
+    muff-*.zip.sha256
+    artifacts/muff-*.tar.gz
+    artifacts/muff-*.zip
+    artifacts/muff-*.tar.gz.sha256
+    artifacts/muff-*.zip.sha256
+  )
 fi
 
 EXISTING=0
@@ -56,4 +65,3 @@ else
 fi
 
 echo "Done: GitHub release $TAG updated with ${#FOUND[@]} asset(s)."
-

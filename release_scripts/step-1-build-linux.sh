@@ -8,8 +8,8 @@ set -euo pipefail
 
 PACKAGE_NAME_DEFAULT="muff"
 MODULE_NAME_DEFAULT="ruff"
-BINARY_NAME_DEFAULT="ruff"
-ARCHIVE_PREFIX_DEFAULT="ruff"
+BINARY_NAME_DEFAULT="muff"
+ARCHIVE_PREFIX_DEFAULT="muff"
 
 ARCH=""
 BUILD_SDIST=0
@@ -66,7 +66,8 @@ maturin build \
 
 echo "==> Testing wheel"
 python3 -m pip install dist/${PACKAGE_NAME}-*.whl --force-reinstall
-"${BINARY_NAME}" --help >/dev/null
+
+# Test via module; __main__ now resolves to the muff binary internally
 python3 -m "${MODULE_NAME}" --help >/dev/null
 
 if [[ $BUILD_SDIST -eq 1 ]]; then
@@ -77,9 +78,14 @@ fi
 echo "==> Archiving standalone binary"
 ARCHIVE_NAME="${ARCHIVE_PREFIX}-${TARGET_TRIPLE}"
 ARCHIVE_FILE="${ARCHIVE_NAME}.tar.gz"
-mkdir -p "$ARCHIVE_NAME"
-cp "target/${TARGET_TRIPLE}/release/${BINARY_NAME}" "$ARCHIVE_NAME/${BINARY_NAME}"
-tar czf "$ARCHIVE_FILE" "$ARCHIVE_NAME"
-sha256sum "$ARCHIVE_FILE" > "$ARCHIVE_FILE.sha256"
+ARTIFACTS_DIR=${ARTIFACTS_DIR:-artifacts}
+mkdir -p "$ARTIFACTS_DIR"
+
+STAGE_DIR=$(mktemp -d)
+mkdir -p "$STAGE_DIR/$ARCHIVE_NAME"
+cp "target/${TARGET_TRIPLE}/release/${BINARY_NAME}" "$STAGE_DIR/$ARCHIVE_NAME/${BINARY_NAME}"
+tar -C "$STAGE_DIR" -czf "$ARTIFACTS_DIR/$ARCHIVE_FILE" "$ARCHIVE_NAME"
+sha256sum "$ARTIFACTS_DIR/$ARCHIVE_FILE" > "$ARTIFACTS_DIR/$ARCHIVE_FILE.sha256"
+rm -rf "$STAGE_DIR"
 
 echo "==> Done"
