@@ -68,7 +68,6 @@ maturin build \
   --release --locked \
   --target "$TARGET_TRIPLE" \
   --out dist \
-  --manylinux 2014 \
   --compatibility manylinux_2_17
 
 echo "==> Testing wheel"

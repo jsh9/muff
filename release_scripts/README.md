@@ -30,7 +30,7 @@ Prerequisites
   - `gh auth login` (set to your Muff repo).
 - Platform-specific utilities:
   - macOS: `shasum` (preinstalled), `tar`.
-- Linux: `sha256sum`, `tar`. For manylinux wheels, Docker is recommended. The Linux build script uses the manylinux2014 images (`quay.io/pypa/manylinux2014_x86_64` and `quay.io/pypa/manylinux2014_aarch64`) with `--compatibility manylinux_2_17` to target glibc 2.17.
+- Linux: `sha256sum`, `tar`. For maximum compatibility (glibc 2.17), the Linux build script uses `--compatibility manylinux_2_17`.
   - Windows: PowerShell 5+, `Compress-Archive`, `Get-FileHash` (built-in). Optionally `Set-ExecutionPolicy Bypass` to run the script.
 
 Environment variables (optional)
@@ -74,5 +74,5 @@ Recommended flow
 Notes
 - The build scripts call `python scripts/transform_readme.py --target pypi` to prepare the PyPI README.
 - Only one platform needs to build the sdist; use `--sdist` once.
-- Manylinux wheels are built against manylinux2014 with `--compatibility manylinux_2_17` for maximum glibc compatibility (2.17). Docker must be available to use the `quay.io/pypa/manylinux2014_*` images.
+- Manylinux compatibility is set to glibc 2.17 using `--compatibility manylinux_2_17`. Do not combine with `--manylinux` (maturin expects only one policy).
 - Ensure you’re logged into GitHub (`gh auth login`) and PyPI (`twine` or `maturin` configured) before steps 2 and 3.
