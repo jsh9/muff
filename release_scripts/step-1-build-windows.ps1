@@ -30,14 +30,23 @@ except Exception:
     import tomli
 data = pathlib.Path("pyproject.toml").read_text()
 cfg = tomli.loads(data)
-print(cfg["project"]["version"]) 
+print(cfg["project"]["version"])
 '@
 
 $VERSION = (& python - << $readVersion).Trim()
 
 Write-Host "==> Building wheel for $TARGET_TRIPLE (version $VERSION)"
-try { & python scripts/transform_readme.py --target pypi | Out-Null } catch { }
-& maturin build --release --locked --target $TARGET_TRIPLE --out dist
+## Temporarily transform README.md for PyPI, then restore it at the end
+$readme = Join-Path (Get-Location) 'README.md'
+$readmeBackup = [System.IO.Path]::GetTempFileName()
+if (Test-Path $readme) { Copy-Item $readme $readmeBackup -Force }
+
+try {
+  try { & python scripts/transform_readme.py --target pypi | Out-Null } catch { }
+  & maturin build --release --locked --target $TARGET_TRIPLE --out dist
+} finally {
+  if (Test-Path $readmeBackup) { Copy-Item $readmeBackup $readme -Force; Remove-Item $readmeBackup -Force }
+}
 
 Write-Host "==> Testing wheel"
 & python -m pip install dist/${PACKAGE_NAME}-*.whl --force-reinstall

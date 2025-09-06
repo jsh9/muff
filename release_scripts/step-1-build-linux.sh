@@ -56,6 +56,13 @@ BINARY_NAME=${BINARY_NAME:-$BINARY_NAME_DEFAULT}
 ARCHIVE_PREFIX=${ARCHIVE_PREFIX:-$ARCHIVE_PREFIX_DEFAULT}
 
 echo "==> Building wheel for $TARGET_TRIPLE (version $VERSION)"
+
+# Temporarily transform README for PyPI, then restore on exit
+READMETMP="$(mktemp)"
+if [[ -f README.md ]]; then
+  cp README.md "$READMETMP" || true
+  trap 'if [[ -f "$READMETMP" ]]; then cp "$READMETMP" README.md 2>/dev/null || true; rm -f "$READMETMP"; fi' EXIT
+fi
 python3 scripts/transform_readme.py --target pypi || true
 maturin build \
   --release --locked \
