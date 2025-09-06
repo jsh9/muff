@@ -82,8 +82,8 @@ impl GlobalConfigArgs {
 #[command(
     author,
     name = "muff",
-    about = "Ruff: An extremely fast Python linter and code formatter.",
-    after_help = "For help with a specific command, see: `ruff help <command>`."
+    about = "Muff: An extremely fast Python linter and code formatter.",
+    after_help = "For help with a specific command, see: `muff help <command>`."
 )]
 #[command(version)]
 pub struct Args {
@@ -96,7 +96,7 @@ pub struct Args {
 #[expect(clippy::large_enum_variant)]
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Run Ruff on the given files or directories.
+    /// Run Muff on the given files or directories.
     Check(CheckCommand),
     /// Explain a rule (or all rules).
     #[command(group = clap::ArgGroup::new("selector").multiple(false).required(true))]
@@ -136,14 +136,14 @@ pub enum Command {
     /// Generate shell completion.
     #[clap(hide = true)]
     GenerateShellCompletion { shell: clap_complete_command::Shell },
-    /// Run the Ruff formatter on the given files or directories.
+    /// Run the Muff formatter on the given files or directories.
     Format(FormatCommand),
     /// Run the language server.
     Server(ServerCommand),
     /// Run analysis over Python source code.
     #[clap(subcommand)]
     Analyze(AnalyzeCommand),
-    /// Display Ruff's version
+    /// Display Muff's version
     Version {
         #[arg(long, value_enum, default_value = "text")]
         output_format: HelpFormat,
@@ -356,7 +356,7 @@ pub struct CheckCommand {
     respect_gitignore: bool,
     #[clap(long, overrides_with("respect_gitignore"), hide = true)]
     no_respect_gitignore: bool,
-    /// Enforce exclusions, even for paths passed to Ruff directly on the command-line.
+    /// Enforce exclusions, even for paths passed to Muff directly on the command-line.
     /// Use `--no-force-exclude` to disable.
     #[arg(
         long,
@@ -418,7 +418,7 @@ pub struct CheckCommand {
         conflicts_with = "fix",
     )]
     pub add_noqa: bool,
-    /// See the files Ruff will be run against with the current settings.
+    /// See the files Muff will be run against with the current settings.
     #[arg(
         long,
         // Fake subcommands.
@@ -432,7 +432,7 @@ pub struct CheckCommand {
         conflicts_with = "watch",
     )]
     pub show_files: bool,
-    /// See the settings Ruff will use to lint a given Python file.
+    /// See the settings Muff will use to lint a given Python file.
     #[arg(
         long,
         // Fake subcommands.
@@ -489,7 +489,7 @@ pub struct FormatCommand {
     )]
     pub exclude: Option<Vec<FilePattern>>,
 
-    /// Enforce exclusions, even for paths passed to Ruff directly on the command-line.
+    /// Enforce exclusions, even for paths passed to Muff directly on the command-line.
     /// Use `--no-force-exclude` to disable.
     #[arg(
         long,
@@ -519,7 +519,7 @@ pub struct FormatCommand {
     #[clap(long, overrides_with("preview"), hide = true)]
     no_preview: bool,
 
-    /// When specified, Ruff will try to only format the code in the given range.
+    /// When specified, Muff will try to only format the code in the given range.
     /// It might be necessary to extend the start backwards or the end forwards, to fully enclose a logical line.
     /// The `<RANGE>` uses the format `<start_line>:<start_column>-<end_line>:<end_column>`.
     ///
