@@ -1,5 +1,113 @@
 # Changelog
 
+## 0.13.2
+
+Released on 2025-09-25.
+
+### Preview features
+
+- \[`flake8-async`\] Implement `blocking-path-method` (`ASYNC240`) ([#20264](https://github.com/astral-sh/ruff/pull/20264))
+- \[`flake8-bugbear`\] Implement `map-without-explicit-strict` (`B912`) ([#20429](https://github.com/astral-sh/ruff/pull/20429))
+- \[`flake8-bultins`\] Detect class-scope builtin shadowing in decorators, default args, and attribute initializers (`A003`) ([#20178](https://github.com/astral-sh/ruff/pull/20178))
+- \[`ruff`\] Implement `logging-eager-conversion` (`RUF065`) ([#19942](https://github.com/astral-sh/ruff/pull/19942))
+- Include `.pyw` files by default when linting and formatting ([#20458](https://github.com/astral-sh/ruff/pull/20458))
+
+### Bug fixes
+
+- Deduplicate input paths ([#20105](https://github.com/astral-sh/ruff/pull/20105))
+- \[`flake8-comprehensions`\] Preserve trailing commas for single-element lists (`C409`) ([#19571](https://github.com/astral-sh/ruff/pull/19571))
+- \[`flake8-pyi`\] Avoid syntax error from conflict with `PIE790` (`PYI021`) ([#20010](https://github.com/astral-sh/ruff/pull/20010))
+- \[`flake8-simplify`\] Correct fix for positive `maxsplit` without separator (`SIM905`) ([#20056](https://github.com/astral-sh/ruff/pull/20056))
+- \[`pyupgrade`\] Fix `UP008` not to apply when `__class__` is a local variable ([#20497](https://github.com/astral-sh/ruff/pull/20497))
+- \[`ruff`\] Fix `B004` to skip invalid `hasattr`/`getattr` calls ([#20486](https://github.com/astral-sh/ruff/pull/20486))
+- \[`ruff`\] Replace `-nan` with `nan` when using the value to construct a `Decimal` (`FURB164` ) ([#20391](https://github.com/astral-sh/ruff/pull/20391))
+
+### Documentation
+
+- Add 'Finding ways to help' to CONTRIBUTING.md ([#20567](https://github.com/astral-sh/ruff/pull/20567))
+- Update import path to `ruff-wasm-web` ([#20539](https://github.com/astral-sh/ruff/pull/20539))
+- \[`flake8-bandit`\] Clarify the supported hashing functions (`S324`) ([#20534](https://github.com/astral-sh/ruff/pull/20534))
+
+### Other changes
+
+- \[`playground`\] Allow hover quick fixes to appear for overlapping diagnostics ([#20527](https://github.com/astral-sh/ruff/pull/20527))
+- \[`playground`\] Fix non‑BMP code point handling in quick fixes and markers ([#20526](https://github.com/astral-sh/ruff/pull/20526))
+
+### Contributors
+
+- [@BurntSushi](https://github.com/BurntSushi)
+- [@mtshiba](https://github.com/mtshiba)
+- [@second-ed](https://github.com/second-ed)
+- [@danparizher](https://github.com/danparizher)
+- [@ShikChen](https://github.com/ShikChen)
+- [@PieterCK](https://github.com/PieterCK)
+- [@GDYendell](https://github.com/GDYendell)
+- [@RazerM](https://github.com/RazerM)
+- [@TaKO8Ki](https://github.com/TaKO8Ki)
+- [@amyreese](https://github.com/amyreese)
+- [@ntbre](https://github.com/ntBre)
+- [@MichaReiser](https://github.com/MichaReiser)
+
+## 0.13.1
+
+Released on 2025-09-18.
+
+### Preview features
+
+- \[`flake8-simplify`\] Detect unnecessary `None` default for additional key expression types (`SIM910`) ([#20343](https://github.com/astral-sh/ruff/pull/20343))
+- \[`flake8-use-pathlib`\] Add fix for `PTH123` ([#20169](https://github.com/astral-sh/ruff/pull/20169))
+- \[`flake8-use-pathlib`\] Fix `PTH101`, `PTH104`, `PTH105`, `PTH121` fixes ([#20143](https://github.com/astral-sh/ruff/pull/20143))
+- \[`flake8-use-pathlib`\] Make `PTH111` fix unsafe because it can change behavior ([#20215](https://github.com/astral-sh/ruff/pull/20215))
+- \[`pycodestyle`\] Fix `E301` to only trigger for functions immediately within a class ([#19768](https://github.com/astral-sh/ruff/pull/19768))
+- \[`refurb`\] Mark `single-item-membership-test` fix as always unsafe (`FURB171`) ([#20279](https://github.com/astral-sh/ruff/pull/20279))
+
+### Bug fixes
+
+- Handle t-strings for token-based rules and suppression comments ([#20357](https://github.com/astral-sh/ruff/pull/20357))
+- \[`flake8-bandit`\] Fix truthiness: dict-only `**` displays not truthy for `shell` (`S602`, `S604`, `S609`) ([#20177](https://github.com/astral-sh/ruff/pull/20177))
+- \[`flake8-simplify`\] Fix diagnostic to show correct method name for `str.rsplit` calls (`SIM905`) ([#20459](https://github.com/astral-sh/ruff/pull/20459))
+- \[`flynt`\] Use triple quotes for joined raw strings with newlines (`FLY002`) ([#20197](https://github.com/astral-sh/ruff/pull/20197))
+- \[`pyupgrade`\] Fix false positive when class name is shadowed by local variable (`UP008`) ([#20427](https://github.com/astral-sh/ruff/pull/20427))
+- \[`pyupgrade`\] Prevent infinite loop with `I002` and `UP026` ([#20327](https://github.com/astral-sh/ruff/pull/20327))
+- \[`ruff`\] Recognize t-strings, generators, and lambdas in `invalid-index-type` (`RUF016`) ([#20213](https://github.com/astral-sh/ruff/pull/20213))
+
+### Rule changes
+
+- \[`RUF102`\] Respect rule redirects in invalid rule code detection ([#20245](https://github.com/astral-sh/ruff/pull/20245))
+- \[`flake8-bugbear`\] Mark the fix for `unreliable-callable-check` as always unsafe (`B004`) ([#20318](https://github.com/astral-sh/ruff/pull/20318))
+- \[`ruff`\] Allow dataclass attribute value instantiation from nested frozen dataclass (`RUF009`) ([#20352](https://github.com/astral-sh/ruff/pull/20352))
+
+### CLI
+
+- Add fixes to `output-format=sarif` ([#20300](https://github.com/astral-sh/ruff/pull/20300))
+- Treat panics as fatal diagnostics, sort panics last ([#20258](https://github.com/astral-sh/ruff/pull/20258))
+
+### Documentation
+
+- \[`ruff`\] Add `analyze.string-imports-min-dots` to settings ([#20375](https://github.com/astral-sh/ruff/pull/20375))
+- Update README.md with Albumentations new repository URL ([#20415](https://github.com/astral-sh/ruff/pull/20415))
+
+### Other changes
+
+- Bump MSRV to Rust 1.88 ([#20470](https://github.com/astral-sh/ruff/pull/20470))
+- Enable inline noqa for multiline strings in playground ([#20442](https://github.com/astral-sh/ruff/pull/20442))
+
+### Contributors
+
+- [@chirizxc](https://github.com/chirizxc)
+- [@danparizher](https://github.com/danparizher)
+- [@IDrokin117](https://github.com/IDrokin117)
+- [@amyreese](https://github.com/amyreese)
+- [@AlexWaygood](https://github.com/AlexWaygood)
+- [@dylwil3](https://github.com/dylwil3)
+- [@njhearp](https://github.com/njhearp)
+- [@woodruffw](https://github.com/woodruffw)
+- [@dcreager](https://github.com/dcreager)
+- [@TaKO8Ki](https://github.com/TaKO8Ki)
+- [@BurntSushi](https://github.com/BurntSushi)
+- [@salahelfarissi](https://github.com/salahelfarissi)
+- [@MichaReiser](https://github.com/MichaReiser)
+
 ## 0.13.0
 
 Check out the [blog post](https://astral.sh/blog/ruff-v0.13.0) for a migration

@@ -203,7 +203,9 @@ fn all_submodule_names_for_package<'db>(
                 })
                 .filter_map(|entry| {
                     let stem = entry.path().file_stem()?;
-                    let name = ModuleName::new(stem)?;
+                    let mut name = module.name(db).clone();
+                    name.extend(&ModuleName::new(stem)?);
+
                     let (kind, file) = if entry.file_type().is_directory() {
                         (
                             ModuleKind::Package,
@@ -239,7 +241,9 @@ fn all_submodule_names_for_package<'db>(
             })
             .filter_map(|entry| {
                 let stem = entry.path().file_stem()?;
-                let name = ModuleName::new(stem)?;
+                let mut name = module.name(db).clone();
+                name.extend(&ModuleName::new(stem)?);
+
                 let (kind, file) = if entry.file_type().is_directory() {
                     (
                         ModuleKind::Package,
@@ -314,6 +318,9 @@ pub enum KnownModule {
     TypingExtensions,
     Typing,
     Sys,
+    Os,
+    Tempfile,
+    Pathlib,
     Abc,
     Dataclasses,
     Collections,
@@ -343,6 +350,9 @@ impl KnownModule {
             Self::Typeshed => "_typeshed",
             Self::TypingExtensions => "typing_extensions",
             Self::Sys => "sys",
+            Self::Os => "os",
+            Self::Tempfile => "tempfile",
+            Self::Pathlib => "pathlib",
             Self::Abc => "abc",
             Self::Dataclasses => "dataclasses",
             Self::Collections => "collections",

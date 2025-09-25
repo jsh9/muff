@@ -1081,15 +1081,12 @@ fn is_instance_truthiness<'db>(
         | Type::StringLiteral(..)
         | Type::LiteralString
         | Type::ModuleLiteral(..)
-        | Type::EnumLiteral(..) => always_true_if(
+        | Type::EnumLiteral(..)
+        | Type::FunctionLiteral(..) => always_true_if(
             ty.literal_fallback_instance(db)
                 .as_ref()
                 .is_some_and(is_instance),
         ),
-
-        Type::FunctionLiteral(..) => {
-            always_true_if(is_instance(&KnownClass::FunctionType.to_instance(db)))
-        }
 
         Type::ClassLiteral(..) => always_true_if(is_instance(&KnownClass::Type.to_instance(db))),
 
@@ -1121,6 +1118,70 @@ fn is_instance_truthiness<'db>(
             Truthiness::Ambiguous
         }
     }
+}
+
+/// Return true, if the type passed as `mode` would require us to pick a non-trivial overload of
+/// `builtins.open` / `os.fdopen` / `Path.open`.
+fn is_mode_with_nontrivial_return_type<'db>(db: &'db dyn Db, mode: Type<'db>) -> bool {
+    // Return true for any mode that doesn't match typeshed's
+    // `OpenTextMode` type alias (<https://github.com/python/typeshed/blob/6937a9b193bfc2f0696452d58aad96d7627aa29a/stdlib/_typeshed/__init__.pyi#L220>).
+    mode.into_string_literal().is_none_or(|mode| {
+        !matches!(
+            mode.value(db),
+            "r+" | "+r"
+                | "rt+"
+                | "r+t"
+                | "+rt"
+                | "tr+"
+                | "t+r"
+                | "+tr"
+                | "w+"
+                | "+w"
+                | "wt+"
+                | "w+t"
+                | "+wt"
+                | "tw+"
+                | "t+w"
+                | "+tw"
+                | "a+"
+                | "+a"
+                | "at+"
+                | "a+t"
+                | "+at"
+                | "ta+"
+                | "t+a"
+                | "+ta"
+                | "x+"
+                | "+x"
+                | "xt+"
+                | "x+t"
+                | "+xt"
+                | "tx+"
+                | "t+x"
+                | "+tx"
+                | "w"
+                | "wt"
+                | "tw"
+                | "a"
+                | "at"
+                | "ta"
+                | "x"
+                | "xt"
+                | "tx"
+                | "r"
+                | "rt"
+                | "tr"
+                | "U"
+                | "rU"
+                | "Ur"
+                | "rtU"
+                | "rUt"
+                | "Urt"
+                | "trU"
+                | "tUr"
+                | "Utr"
+        )
+    })
 }
 
 fn signature_cycle_recover<'db>(
@@ -1191,7 +1252,15 @@ pub enum KnownFunction {
     DunderImport,
     /// `importlib.import_module`, which returns the submodule.
     ImportModule,
+    /// `builtins.open`
     Open,
+
+    /// `os.fdopen`
+    Fdopen,
+
+    /// `tempfile.NamedTemporaryFile`
+    #[strum(serialize = "NamedTemporaryFile")]
+    NamedTemporaryFile,
 
     /// `typing(_extensions).final`
     Final,
@@ -1259,10 +1328,8 @@ pub enum KnownFunction {
     RevealProtocolInterface,
     /// `ty_extensions.range_constraint`
     RangeConstraint,
-    /// `ty_extensions.not_equivalent_constraint`
-    NotEquivalentConstraint,
-    /// `ty_extensions.incomparable_constraint`
-    IncomparableConstraint,
+    /// `ty_extensions.negated_range_constraint`
+    NegatedRangeConstraint,
 }
 
 impl KnownFunction {
@@ -1313,6 +1380,12 @@ impl KnownFunction {
             Self::AbstractMethod => {
                 matches!(module, KnownModule::Abc)
             }
+            Self::Fdopen => {
+                matches!(module, KnownModule::Os)
+            }
+            Self::NamedTemporaryFile => {
+                matches!(module, KnownModule::Tempfile)
+            }
             Self::Dataclass | Self::Field => {
                 matches!(module, KnownModule::Dataclasses)
             }
@@ -1330,8 +1403,7 @@ impl KnownFunction {
             | Self::HasMember
             | Self::RevealProtocolInterface
             | Self::RangeConstraint
-            | Self::NotEquivalentConstraint
-            | Self::IncomparableConstraint
+            | Self::NegatedRangeConstraint
             | Self::AllMembers => module.is_ty_extensions(),
             Self::ImportModule => module.is_importlib(),
         }
@@ -1502,8 +1574,8 @@ impl KnownFunction {
                 let contains_unknown_or_todo =
                     |ty| matches!(ty, Type::Dynamic(dynamic) if dynamic != DynamicType::Any);
                 if source_type.is_equivalent_to(db, *casted_type)
-                    && !any_over_type(db, *source_type, &contains_unknown_or_todo)
-                    && !any_over_type(db, *casted_type, &contains_unknown_or_todo)
+                    && !any_over_type(db, *source_type, &contains_unknown_or_todo, true)
+                    && !any_over_type(db, *casted_type, &contains_unknown_or_todo, true)
                 {
                     if let Some(builder) = context.report_lint(&REDUNDANT_CAST, call_expression) {
                         builder.into_diagnostic(format_args!(
@@ -1644,61 +1716,17 @@ impl KnownFunction {
                 )));
             }
 
-            KnownFunction::NotEquivalentConstraint => {
-                let [Some(Type::NonInferableTypeVar(typevar)), Some(hole)] = parameter_types else {
-                    return;
-                };
-
-                if !hole.is_equivalent_to(db, hole.top_materialization(db)) {
-                    if let Some(builder) =
-                        context.report_lint(&INVALID_ARGUMENT_TYPE, call_expression)
-                    {
-                        let mut diagnostic = builder.into_diagnostic(format_args!(
-                            "Not-equivalent constraint must have a fully static type"
-                        ));
-                        diagnostic.annotate(
-                            Annotation::secondary(context.span(&call_expression.arguments.args[1]))
-                                .message(format_args!(
-                                    "Type `{}` is not fully static",
-                                    hole.display(db)
-                                )),
-                        );
-                    }
-                    return;
-                }
-
-                let constraints = ConstraintSet::not_equivalent(db, *typevar, *hole);
-                let tracked = TrackedConstraintSet::new(db, constraints);
-                overload.set_return_type(Type::KnownInstance(KnownInstanceType::ConstraintSet(
-                    tracked,
-                )));
-            }
-
-            KnownFunction::IncomparableConstraint => {
-                let [Some(Type::NonInferableTypeVar(typevar)), Some(pivot)] = parameter_types
+            KnownFunction::NegatedRangeConstraint => {
+                let [
+                    Some(lower),
+                    Some(Type::NonInferableTypeVar(typevar)),
+                    Some(upper),
+                ] = parameter_types
                 else {
                     return;
                 };
 
-                if !pivot.is_equivalent_to(db, pivot.top_materialization(db)) {
-                    if let Some(builder) =
-                        context.report_lint(&INVALID_ARGUMENT_TYPE, call_expression)
-                    {
-                        let mut diagnostic = builder.into_diagnostic(format_args!(
-                            "Incomparable constraint must have a fully static type"
-                        ));
-                        diagnostic.annotate(
-                            Annotation::secondary(context.span(&call_expression.arguments.args[1]))
-                                .message(format_args!(
-                                    "Type `{}` is not fully static",
-                                    pivot.display(db)
-                                )),
-                        );
-                    }
-                    return;
-                }
-
-                let constraints = ConstraintSet::incomparable(db, *typevar, *pivot);
+                let constraints = ConstraintSet::negated_range(db, *lower, *typevar, *upper);
                 let tracked = TrackedConstraintSet::new(db, constraints);
                 overload.set_return_type(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     tracked,
@@ -1706,72 +1734,33 @@ impl KnownFunction {
             }
 
             KnownFunction::Open => {
-                // Temporary special-casing for `builtins.open` to avoid an excessive number of false positives
-                // in lieu of proper support for PEP-614 type aliases.
-                if let [_, Some(mode), ..] = parameter_types {
-                    // Infer `Todo` for any argument that doesn't match typeshed's
-                    // `OpenTextMode` type alias (<https://github.com/python/typeshed/blob/6937a9b193bfc2f0696452d58aad96d7627aa29a/stdlib/_typeshed/__init__.pyi#L220>).
-                    // Without this special-casing, we'd just always select the first overload in our current state,
-                    // which leads to lots of false positives.
-                    if mode.into_string_literal().is_none_or(|mode| {
-                        !matches!(
-                            mode.value(db),
-                            "r+" | "+r"
-                                | "rt+"
-                                | "r+t"
-                                | "+rt"
-                                | "tr+"
-                                | "t+r"
-                                | "+tr"
-                                | "w+"
-                                | "+w"
-                                | "wt+"
-                                | "w+t"
-                                | "+wt"
-                                | "tw+"
-                                | "t+w"
-                                | "+tw"
-                                | "a+"
-                                | "+a"
-                                | "at+"
-                                | "a+t"
-                                | "+at"
-                                | "ta+"
-                                | "t+a"
-                                | "+ta"
-                                | "x+"
-                                | "+x"
-                                | "xt+"
-                                | "x+t"
-                                | "+xt"
-                                | "tx+"
-                                | "t+x"
-                                | "+tx"
-                                | "w"
-                                | "wt"
-                                | "tw"
-                                | "a"
-                                | "at"
-                                | "ta"
-                                | "x"
-                                | "xt"
-                                | "tx"
-                                | "r"
-                                | "rt"
-                                | "tr"
-                                | "U"
-                                | "rU"
-                                | "Ur"
-                                | "rtU"
-                                | "rUt"
-                                | "Urt"
-                                | "trU"
-                                | "tUr"
-                                | "Utr"
-                        )
-                    }) {
-                        overload.set_return_type(todo_type!("`builtins.open` return type"));
-                    }
+                // TODO: Temporary special-casing for `builtins.open` to avoid an excessive number of
+                // false positives in lieu of proper support for PEP-613 type aliases.
+                if let [_, Some(mode), ..] = parameter_types
+                    && is_mode_with_nontrivial_return_type(db, *mode)
+                {
+                    overload.set_return_type(todo_type!("`builtins.open` return type"));
+                }
+            }
+
+            KnownFunction::Fdopen => {
+                // TODO: Temporary special-casing for `os.fdopen` to avoid an excessive number of
+                // false positives in lieu of proper support for PEP-613 type aliases.
+                if let [_, Some(mode), ..] = parameter_types
+                    && is_mode_with_nontrivial_return_type(db, *mode)
+                {
+                    overload.set_return_type(todo_type!("`os.fdopen` return type"));
+                }
+            }
+
+            KnownFunction::NamedTemporaryFile => {
+                // TODO: Temporary special-casing for `tempfile.NamedTemporaryFile` to avoid an excessive number of
+                // false positives in lieu of proper support for PEP-613 type aliases.
+                if let [Some(mode), ..] = parameter_types
+                    && is_mode_with_nontrivial_return_type(db, *mode)
+                {
+                    overload
+                        .set_return_type(todo_type!("`tempfile.NamedTemporaryFile` return type"));
                 }
             }
 
@@ -1806,6 +1795,10 @@ pub(crate) mod tests {
 
                 KnownFunction::AbstractMethod => KnownModule::Abc,
 
+                KnownFunction::Fdopen => KnownModule::Os,
+
+                KnownFunction::NamedTemporaryFile => KnownModule::Tempfile,
+
                 KnownFunction::Dataclass | KnownFunction::Field => KnownModule::Dataclasses,
 
                 KnownFunction::GetattrStatic => KnownModule::Inspect,
@@ -1837,8 +1830,7 @@ pub(crate) mod tests {
                 | KnownFunction::HasMember
                 | KnownFunction::RevealProtocolInterface
                 | KnownFunction::RangeConstraint
-                | KnownFunction::NotEquivalentConstraint
-                | KnownFunction::IncomparableConstraint
+                | KnownFunction::NegatedRangeConstraint
                 | KnownFunction::AllMembers => KnownModule::TyExtensions,
 
                 KnownFunction::ImportModule => KnownModule::ImportLib,

@@ -44,7 +44,7 @@ impl TupleLength {
         TupleLength::Variable(0, 0)
     }
 
-    pub(crate) fn is_variable(self) -> bool {
+    pub(crate) const fn is_variable(self) -> bool {
         matches!(self, TupleLength::Variable(_, _))
     }
 
@@ -545,11 +545,15 @@ impl<T> VariableLengthTuple<T> {
         })
     }
 
-    fn prefix_elements(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator + '_ {
+    pub(crate) fn prefix_elements(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator + '_ {
         self.prefix.iter()
     }
 
-    fn suffix_elements(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator + '_ {
+    pub(crate) fn suffix_elements(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator + '_ {
         self.suffix.iter()
     }
 
@@ -964,6 +968,14 @@ impl<T> Tuple<T> {
 
     pub(crate) fn heterogeneous(elements: impl IntoIterator<Item = T>) -> Self {
         FixedLengthTuple::from_elements(elements).into()
+    }
+
+    /// Returns the variable-length element of this tuple, if it has one.
+    pub(crate) fn variable_element(&self) -> Option<&T> {
+        match self {
+            Tuple::Fixed(_) => None,
+            Tuple::Variable(tuple) => Some(&tuple.variable),
+        }
     }
 
     /// Returns an iterator of all of the fixed-length element types of this tuple.
