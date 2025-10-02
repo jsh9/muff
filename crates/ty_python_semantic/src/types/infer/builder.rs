@@ -92,7 +92,7 @@ use crate::types::{
     DynamicType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType,
     MemberLookupPolicy, MetaclassCandidate, PEP695TypeAliasType, Parameter, ParameterForm,
     Parameters, SpecialFormType, SubclassOfType, TrackedConstraintSet, Truthiness, Type,
-    TypeAliasType, TypeAndQualifiers, TypeContext, TypeMapping, TypeQualifiers,
+    TypeAliasType, TypeAndQualifiers, TypeContext, TypeQualifiers,
     TypeVarBoundOrConstraintsEvaluation, TypeVarDefaultEvaluation, TypeVarInstance, TypeVarKind,
     UnionBuilder, UnionType, binding_type, todo_type,
 };
@@ -1923,8 +1923,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 //
                 // If type arguments are supplied to `(Async)Iterable`, `(Async)Iterator`,
                 // `(Async)Generator` or `(Async)GeneratorType` in the return annotation,
-                // we should iterate over the `yield` expressions and `return` statements in the function
-                // to check that they are consistent with the type arguments provided.
+                // we should iterate over the `yield` expressions and `return` statements
+                // in the function to check that they are consistent with the type arguments
+                // provided. Once we do this, the `.to_instance_unknown` call below should
+                // be replaced with `.to_specialized_instance`.
                 let inferred_return = if function.is_async {
                     KnownClass::AsyncGeneratorType
                 } else {
@@ -1932,7 +1934,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 };
 
                 if !inferred_return
-                    .to_instance(self.db())
+                    .to_instance_unknown(self.db())
                     .is_assignable_to(self.db(), expected_ty)
                 {
                     report_invalid_generator_function_return_type(
@@ -2144,12 +2146,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let function_literal =
             FunctionLiteral::new(self.db(), overload_literal, inherited_generic_context);
 
-        let type_mappings = Box::default();
-        let mut inferred_ty = Type::FunctionLiteral(FunctionType::new(
-            self.db(),
-            function_literal,
-            type_mappings,
-        ));
+        let mut inferred_ty =
+            Type::FunctionLiteral(FunctionType::new(self.db(), function_literal, None, None));
         self.undecorated_type = Some(inferred_ty);
 
         for (decorator_ty, decorator_node) in decorator_types_and_nodes.iter().rev() {
@@ -5436,8 +5434,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 // Convert any element literals to their promoted type form to avoid excessively large
                 // unions for large nested list literals, which the constraint solver struggles with.
-                let inferred_elt_ty =
-                    inferred_elt_ty.apply_type_mapping(self.db(), &TypeMapping::PromoteLiterals);
+                let inferred_elt_ty = inferred_elt_ty.promote_literals(self.db());
 
                 builder
                     .infer(Type::TypeVar(*elt_ty), inferred_elt_ty)
@@ -5954,7 +5951,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // but constructor calls to `tuple[int]`, `tuple[int, ...]`, `tuple[int, *tuple[str, ...]]` (etc.)
                 // are handled by the default constructor-call logic (we synthesize a `__new__` method for them
                 // in `ClassType::own_class_member()`).
-                class.is_known(self.db(), KnownClass::Tuple) && class.is_not_generic()
+                class.is_known(self.db(), KnownClass::Tuple) && !class.is_generic()
             );
 
             // temporary special-casing for all subclasses of `enum.Enum`
@@ -6947,7 +6944,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ast::UnaryOp::Invert,
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(constraints)),
             ) => {
-                let constraints = constraints.constraints(self.db()).clone();
+                let constraints = constraints.constraints(self.db());
                 let result = constraints.negate(self.db());
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(TrackedConstraintSet::new(
                     self.db(),
@@ -7311,9 +7308,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(right)),
                 ast::Operator::BitAnd,
             ) => {
-                let left = left.constraints(self.db()).clone();
-                let right = right.constraints(self.db()).clone();
-                let result = left.and(self.db(), || right);
+                let left = left.constraints(self.db());
+                let right = right.constraints(self.db());
+                let result = left.and(self.db(), || *right);
                 Some(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     TrackedConstraintSet::new(self.db(), result),
                 )))
@@ -7324,9 +7321,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(right)),
                 ast::Operator::BitOr,
             ) => {
-                let left = left.constraints(self.db()).clone();
-                let right = right.constraints(self.db()).clone();
-                let result = left.or(self.db(), || right);
+                let left = left.constraints(self.db());
+                let right = right.constraints(self.db());
+                let result = left.or(self.db(), || *right);
                 Some(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     TrackedConstraintSet::new(self.db(), result),
                 )))
@@ -8982,7 +8979,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = typevar {
                     bind_typevar(
                         self.db(),
-                        self.module(),
                         self.index,
                         self.scope().file_scope_id(self.db()),
                         self.typevar_binding_context,
