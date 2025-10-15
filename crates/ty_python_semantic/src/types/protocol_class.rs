@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::types::TypeContext;
 use crate::{
     Db, FxOrderSet,
-    place::{Boundness, Place, PlaceAndQualifiers, place_from_bindings, place_from_declarations},
+    place::{Definedness, Place, PlaceAndQualifiers, place_from_bindings, place_from_declarations},
     semantic_index::{
         SemanticIndex, definition::Definition, place::ScopedPlaceId, place_table, use_def_map,
     },
@@ -22,6 +22,7 @@ use crate::{
         constraints::{ConstraintSet, IteratorConstraintsExtension, OptionConstraintsExtension},
         context::InferContext,
         diagnostic::report_undeclared_protocol_member,
+        generics::InferableTypeVars,
         signatures::{Parameter, Parameters},
         todo_type,
     },
@@ -110,7 +111,7 @@ impl<'db> ProtocolClass<'db> {
                         .into_place_and_conflicting_declarations()
                         .0
                         .place
-                        .is_unbound()
+                        .is_undefined()
                     });
 
             if has_declaration {
@@ -235,6 +236,7 @@ impl<'db> ProtocolInterface<'db> {
         self,
         db: &'db dyn Db,
         other: Self,
+        inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
         relation_visitor: &HasRelationToVisitor<'db>,
         disjointness_visitor: &IsDisjointVisitor<'db>,
@@ -276,6 +278,7 @@ impl<'db> ProtocolInterface<'db> {
                         our_type.has_relation_to_impl(
                             db,
                             Type::Callable(other_type.bind_self(db)),
+                            inferable,
                             relation,
                             relation_visitor,
                             disjointness_visitor,
@@ -288,6 +291,7 @@ impl<'db> ProtocolInterface<'db> {
                     ) => our_method.bind_self(db).has_relation_to_impl(
                         db,
                         other_method.bind_self(db),
+                        inferable,
                         relation,
                         relation_visitor,
                         disjointness_visitor,
@@ -300,6 +304,7 @@ impl<'db> ProtocolInterface<'db> {
                         .has_relation_to_impl(
                             db,
                             other_type,
+                            inferable,
                             relation,
                             relation_visitor,
                             disjointness_visitor,
@@ -308,6 +313,7 @@ impl<'db> ProtocolInterface<'db> {
                             other_type.has_relation_to_impl(
                                 db,
                                 our_type,
+                                inferable,
                                 relation,
                                 relation_visitor,
                                 disjointness_visitor,
@@ -605,6 +611,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
         &self,
         db: &'db dyn Db,
         other: Type<'db>,
+        inferable: InferableTypeVars<'_, 'db>,
         disjointness_visitor: &IsDisjointVisitor<'db>,
         relation_visitor: &HasRelationToVisitor<'db>,
     ) -> ConstraintSet<'db> {
@@ -613,9 +620,13 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
             ProtocolMemberKind::Property(_) | ProtocolMemberKind::Method(_) => {
                 ConstraintSet::from(false)
             }
-            ProtocolMemberKind::Other(ty) => {
-                ty.is_disjoint_from_impl(db, other, disjointness_visitor, relation_visitor)
-            }
+            ProtocolMemberKind::Other(ty) => ty.is_disjoint_from_impl(
+                db,
+                other,
+                inferable,
+                disjointness_visitor,
+                relation_visitor,
+            ),
         }
     }
 
@@ -625,6 +636,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
         &self,
         db: &'db dyn Db,
         other: Type<'db>,
+        inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
         relation_visitor: &HasRelationToVisitor<'db>,
         disjointness_visitor: &IsDisjointVisitor<'db>,
@@ -633,7 +645,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
             ProtocolMemberKind::Method(method) => {
                 // `__call__` members must be special cased for several reasons:
                 //
-                // 1. Looking up `__call__` on the meta-type of a `Callable` type returns `Place::Unbound` currently
+                // 1. Looking up `__call__` on the meta-type of a `Callable` type returns `Place::Undefined` currently
                 // 2. Looking up `__call__` on the meta-type of a function-literal type currently returns a type that
                 //    has an extremely vague signature (`(*args, **kwargs) -> Any`), which is not useful for protocol
                 //    checking.
@@ -641,16 +653,16 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                 //    unfortunately not sufficient to obtain the `Callable` supertypes of these types, due to the
                 //    complex interaction between `__new__`, `__init__` and metaclass `__call__`.
                 let attribute_type = if self.name == "__call__" {
-                    let Some(attribute_type) = other.into_callable(db) else {
+                    let Some(attribute_type) = other.try_upcast_to_callable(db) else {
                         return ConstraintSet::from(false);
                     };
                     attribute_type
                 } else {
-                    let Place::Type(attribute_type, Boundness::Bound) = other
+                    let Place::Defined(attribute_type, _, Definedness::AlwaysDefined) = other
                         .invoke_descriptor_protocol(
                             db,
                             self.name,
-                            Place::Unbound.into(),
+                            Place::Undefined.into(),
                             InstanceFallbackShadowsNonDataDescriptor::No,
                             MemberLookupPolicy::default(),
                         )
@@ -664,6 +676,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                 attribute_type.has_relation_to_impl(
                     db,
                     Type::Callable(method.bind_self(db)),
+                    inferable,
                     relation,
                     relation_visitor,
                     disjointness_visitor,
@@ -672,10 +685,10 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
             // TODO: consider the types of the attribute on `other` for property members
             ProtocolMemberKind::Property(_) => ConstraintSet::from(matches!(
                 other.member(db, self.name).place,
-                Place::Type(_, Boundness::Bound)
+                Place::Defined(_, _, Definedness::AlwaysDefined)
             )),
             ProtocolMemberKind::Other(member_type) => {
-                let Place::Type(attribute_type, Boundness::Bound) =
+                let Place::Defined(attribute_type, _, Definedness::AlwaysDefined) =
                     other.member(db, self.name).place
                 else {
                     return ConstraintSet::from(false);
@@ -684,6 +697,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                     .has_relation_to_impl(
                         db,
                         attribute_type,
+                        inferable,
                         relation,
                         relation_visitor,
                         disjointness_visitor,
@@ -692,6 +706,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                         attribute_type.has_relation_to_impl(
                             db,
                             *member_type,
+                            inferable,
                             relation,
                             relation_visitor,
                             disjointness_visitor,
@@ -783,7 +798,7 @@ fn cached_protocol_interface<'db>(
         // type narrowing that uses `isinstance()` or `issubclass()` with
         // runtime-checkable protocols.
         for (symbol_id, bindings) in use_def_map.all_end_of_scope_symbol_bindings() {
-            let Some(ty) = place_from_bindings(db, bindings).ignore_possibly_unbound() else {
+            let Some(ty) = place_from_bindings(db, bindings).ignore_possibly_undefined() else {
                 continue;
             };
             direct_members.insert(
@@ -794,7 +809,7 @@ fn cached_protocol_interface<'db>(
 
         for (symbol_id, declarations) in use_def_map.all_end_of_scope_symbol_declarations() {
             let place = place_from_declarations(db, declarations).ignore_conflicting_declarations();
-            if let Some(new_type) = place.place.ignore_possibly_unbound() {
+            if let Some(new_type) = place.place.ignore_possibly_undefined() {
                 direct_members
                     .entry(symbol_id)
                     .and_modify(|(ty, quals, _)| {
