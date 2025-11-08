@@ -49,10 +49,7 @@ impl<'db> ClassBase<'db> {
             ClassBase::Dynamic(DynamicType::Any) => "Any",
             ClassBase::Dynamic(DynamicType::Unknown) => "Unknown",
             ClassBase::Dynamic(
-                DynamicType::Todo(_)
-                | DynamicType::TodoPEP695ParamSpec
-                | DynamicType::TodoTypeAlias
-                | DynamicType::TodoUnpack,
+                DynamicType::Todo(_) | DynamicType::TodoTypeAlias | DynamicType::TodoUnpack,
             ) => "@Todo",
             ClassBase::Dynamic(DynamicType::Divergent(_)) => "Divergent",
             ClassBase::Protocol => "Protocol",
@@ -170,7 +167,9 @@ impl<'db> ClassBase<'db> {
                 | KnownInstanceType::TypeVar(_)
                 | KnownInstanceType::Deprecated(_)
                 | KnownInstanceType::Field(_)
-                | KnownInstanceType::ConstraintSet(_) => None,
+                | KnownInstanceType::ConstraintSet(_)
+                | KnownInstanceType::UnionType(_)
+                | KnownInstanceType::Literal(_) => None,
             },
 
             Type::SpecialForm(special_form) => match special_form {
@@ -347,6 +346,27 @@ impl<'db> ClassBase<'db> {
                 ClassBaseMroIterator::from_class(db, class, additional_specialization)
             }
         }
+    }
+
+    pub(super) fn display(self, db: &'db dyn Db) -> impl std::fmt::Display {
+        struct ClassBaseDisplay<'db> {
+            db: &'db dyn Db,
+            base: ClassBase<'db>,
+        }
+
+        impl std::fmt::Display for ClassBaseDisplay<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self.base {
+                    ClassBase::Dynamic(dynamic) => dynamic.fmt(f),
+                    ClassBase::Class(class) => Type::from(class).display(self.db).fmt(f),
+                    ClassBase::Protocol => f.write_str("typing.Protocol"),
+                    ClassBase::Generic => f.write_str("typing.Generic"),
+                    ClassBase::TypedDict => f.write_str("typing.TypedDict"),
+                }
+            }
+        }
+
+        ClassBaseDisplay { db, base: self }
     }
 }
 

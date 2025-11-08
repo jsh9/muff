@@ -81,7 +81,11 @@ pub(crate) fn infer_scope_types<'db>(db: &'db dyn Db, scope: ScopeId<'db>) -> Sc
     TypeInferenceBuilder::new(db, InferenceRegion::Scope(scope), index, &module).finish_scope()
 }
 
-fn scope_cycle_initial<'db>(_db: &'db dyn Db, scope: ScopeId<'db>) -> ScopeInference<'db> {
+fn scope_cycle_initial<'db>(
+    _db: &'db dyn Db,
+    _id: salsa::Id,
+    scope: ScopeId<'db>,
+) -> ScopeInference<'db> {
     ScopeInference::cycle_initial(scope)
 }
 
@@ -110,22 +114,21 @@ pub(crate) fn infer_definition_types<'db>(
 fn definition_cycle_recover<'db>(
     db: &'db dyn Db,
     _id: salsa::Id,
-    _last_provisional_value: &DefinitionInference<'db>,
-    _value: &DefinitionInference<'db>,
+    last_provisional_value: &DefinitionInference<'db>,
+    value: DefinitionInference<'db>,
     count: u32,
     definition: Definition<'db>,
-) -> salsa::CycleRecoveryAction<DefinitionInference<'db>> {
-    if count == ITERATIONS_BEFORE_FALLBACK {
-        salsa::CycleRecoveryAction::Fallback(DefinitionInference::cycle_fallback(
-            definition.scope(db),
-        ))
+) -> DefinitionInference<'db> {
+    if &value == last_provisional_value || count != ITERATIONS_BEFORE_FALLBACK {
+        value
     } else {
-        salsa::CycleRecoveryAction::Iterate
+        DefinitionInference::cycle_fallback(definition.scope(db))
     }
 }
 
 fn definition_cycle_initial<'db>(
     db: &'db dyn Db,
+    _id: salsa::Id,
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
     DefinitionInference::cycle_initial(definition.scope(db))
@@ -158,6 +161,7 @@ pub(crate) fn infer_deferred_types<'db>(
 
 fn deferred_cycle_initial<'db>(
     db: &'db dyn Db,
+    _id: salsa::Id,
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
     DefinitionInference::cycle_initial(definition.scope(db))
@@ -224,22 +228,21 @@ pub(crate) fn infer_isolated_expression<'db>(
 fn expression_cycle_recover<'db>(
     db: &'db dyn Db,
     _id: salsa::Id,
-    _last_provisional_value: &ExpressionInference<'db>,
-    _value: &ExpressionInference<'db>,
+    last_provisional_value: &ExpressionInference<'db>,
+    value: ExpressionInference<'db>,
     count: u32,
     input: InferExpression<'db>,
-) -> salsa::CycleRecoveryAction<ExpressionInference<'db>> {
-    if count == ITERATIONS_BEFORE_FALLBACK {
-        salsa::CycleRecoveryAction::Fallback(ExpressionInference::cycle_fallback(
-            input.expression(db).scope(db),
-        ))
+) -> ExpressionInference<'db> {
+    if &value == last_provisional_value || count != ITERATIONS_BEFORE_FALLBACK {
+        value
     } else {
-        salsa::CycleRecoveryAction::Iterate
+        ExpressionInference::cycle_fallback(input.expression(db).scope(db))
     }
 }
 
 fn expression_cycle_initial<'db>(
     db: &'db dyn Db,
+    _id: salsa::Id,
     input: InferExpression<'db>,
 ) -> ExpressionInference<'db> {
     ExpressionInference::cycle_initial(input.expression(db).scope(db))
@@ -287,6 +290,7 @@ fn infer_expression_type_impl<'db>(db: &'db dyn Db, input: InferExpression<'db>)
 
 fn single_expression_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _input: InferExpression<'db>,
 ) -> Type<'db> {
     Type::Never
@@ -399,6 +403,7 @@ pub(crate) fn static_expression_truthiness<'db>(
 
 fn static_expression_truthiness_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _expression: Expression<'db>,
 ) -> Truthiness {
     Truthiness::Ambiguous
@@ -422,7 +427,11 @@ pub(super) fn infer_unpack_types<'db>(db: &'db dyn Db, unpack: Unpack<'db>) -> U
     unpacker.finish()
 }
 
-fn unpack_cycle_initial<'db>(_db: &'db dyn Db, _unpack: Unpack<'db>) -> UnpackResult<'db> {
+fn unpack_cycle_initial<'db>(
+    _db: &'db dyn Db,
+    _id: salsa::Id,
+    _unpack: Unpack<'db>,
+) -> UnpackResult<'db> {
     UnpackResult::cycle_initial(Type::Never)
 }
 

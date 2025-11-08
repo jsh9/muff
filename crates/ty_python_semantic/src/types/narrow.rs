@@ -11,8 +11,9 @@ use crate::types::enums::{enum_member_literals, enum_metadata};
 use crate::types::function::KnownFunction;
 use crate::types::infer::infer_same_file_expression_type;
 use crate::types::{
-    ClassLiteral, ClassType, IntersectionBuilder, KnownClass, SubclassOfInner, SubclassOfType,
-    Truthiness, Type, TypeContext, TypeVarBoundOrConstraints, UnionBuilder, infer_expression_types,
+    ClassLiteral, ClassType, IntersectionBuilder, KnownClass, KnownInstanceType, SpecialFormType,
+    SubclassOfInner, SubclassOfType, Truthiness, Type, TypeContext, TypeVarBoundOrConstraints,
+    UnionBuilder, infer_expression_types,
 };
 
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
@@ -120,6 +121,7 @@ fn all_negative_narrowing_constraints_for_pattern<'db>(
 
 fn constraints_for_expression_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _expression: Expression<'db>,
 ) -> Option<NarrowingConstraints<'db>> {
     None
@@ -127,6 +129,7 @@ fn constraints_for_expression_cycle_initial<'db>(
 
 fn negative_constraints_for_expression_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _expression: Expression<'db>,
 ) -> Option<NarrowingConstraints<'db>> {
     None
@@ -208,6 +211,23 @@ impl ClassInfoConstraintFunction {
                         .map(|element| self.generate_constraint(db, *element)),
                 )
             }),
+
+            Type::KnownInstance(KnownInstanceType::UnionType(elements)) => {
+                UnionType::try_from_elements(
+                    db,
+                    elements.elements(db).iter().map(|element| {
+                        // A special case is made for `None` at runtime
+                        // (it's implicitly converted to `NoneType` in `int | None`)
+                        // which means that `isinstance(x, int | None)` works even though
+                        // `None` is not a class literal.
+                        if element.is_none(db) {
+                            self.generate_constraint(db, KnownClass::NoneType.to_class_literal(db))
+                        } else {
+                            self.generate_constraint(db, *element)
+                        }
+                    }),
+                )
+            }
 
             Type::AlwaysFalsy
             | Type::AlwaysTruthy
@@ -960,11 +980,20 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
         let subject = place_expr(subject.node_ref(self.db, self.module))?;
         let place = self.expect_place(&subject);
 
-        let ty = infer_same_file_expression_type(self.db, cls, TypeContext::default(), self.module)
-            .to_instance(self.db)?;
+        let class_type =
+            infer_same_file_expression_type(self.db, cls, TypeContext::default(), self.module);
 
-        let ty = ty.negate_if(self.db, !is_positive);
-        Some(NarrowingConstraints::from_iter([(place, ty)]))
+        let narrowed_type = match class_type {
+            Type::ClassLiteral(class) => {
+                Type::instance(self.db, class.top_materialization(self.db))
+                    .negate_if(self.db, !is_positive)
+            }
+            dynamic @ Type::Dynamic(_) => dynamic,
+            Type::SpecialForm(SpecialFormType::Any) => Type::any(),
+            _ => return None,
+        };
+
+        Some(NarrowingConstraints::from_iter([(place, narrowed_type)]))
     }
 
     fn evaluate_match_pattern_value(

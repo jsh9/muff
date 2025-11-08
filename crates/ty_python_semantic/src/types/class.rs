@@ -30,7 +30,7 @@ use crate::types::member::{Member, class_member};
 use crate::types::signatures::{CallableSignature, Parameter, Parameters, Signature};
 use crate::types::tuple::{TupleSpec, TupleType};
 use crate::types::typed_dict::typed_dict_params_from_class_def;
-use crate::types::visitor::{NonAtomicType, TypeKind, TypeVisitor, walk_non_atomic_type};
+use crate::types::visitor::{TypeCollector, TypeVisitor, walk_type_with_recursion_guard};
 use crate::types::{
     ApplyTypeMappingVisitor, Binding, BoundSuperType, CallableType, DataclassFlags,
     DataclassParams, DeprecatedInstance, FindLegacyTypeVarsVisitor, HasRelationToVisitor,
@@ -71,6 +71,7 @@ use rustc_hash::FxHashSet;
 
 fn explicit_bases_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _self: ClassLiteral<'db>,
 ) -> Box<[Type<'db>]> {
     Box::default()
@@ -78,6 +79,7 @@ fn explicit_bases_cycle_initial<'db>(
 
 fn inheritance_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _self: ClassLiteral<'db>,
 ) -> Option<InheritanceCycle> {
     None
@@ -85,6 +87,7 @@ fn inheritance_cycle_initial<'db>(
 
 fn implicit_attribute_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _class_body_scope: ScopeId<'db>,
     _name: String,
     _target_method_decorator: MethodDecorator,
@@ -94,6 +97,7 @@ fn implicit_attribute_initial<'db>(
 
 fn try_mro_cycle_initial<'db>(
     db: &'db dyn Db,
+    _id: salsa::Id,
     self_: ClassLiteral<'db>,
     specialization: Option<Specialization<'db>>,
 ) -> Result<Mro<'db>, MroError<'db>> {
@@ -104,13 +108,18 @@ fn try_mro_cycle_initial<'db>(
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn is_typed_dict_cycle_initial<'db>(_db: &'db dyn Db, _self: ClassLiteral<'db>) -> bool {
+fn is_typed_dict_cycle_initial<'db>(
+    _db: &'db dyn Db,
+    _id: salsa::Id,
+    _self: ClassLiteral<'db>,
+) -> bool {
     false
 }
 
 #[allow(clippy::unnecessary_wraps)]
 fn try_metaclass_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _self_: ClassLiteral<'db>,
 ) -> Result<(Type<'db>, Option<DataclassTransformerParams<'db>>), MetaclassError<'db>> {
     Err(MetaclassError {
@@ -169,6 +178,7 @@ impl<'db> CodeGeneratorKind<'db> {
 
         fn code_generator_of_class_initial<'db>(
             _db: &'db dyn Db,
+            _id: salsa::Id,
             _class: ClassLiteral<'db>,
             _specialization: Option<Specialization<'db>>,
         ) -> Option<CodeGeneratorKind<'db>> {
@@ -284,7 +294,7 @@ impl<'db> From<GenericAlias<'db>> for Type<'db> {
 
 #[salsa::tracked]
 impl<'db> VarianceInferable<'db> for GenericAlias<'db> {
-    #[salsa::tracked]
+    #[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
     fn variance_of(self, db: &'db dyn Db, typevar: BoundTypeVarInstance<'db>) -> TypeVarVariance {
         let origin = self.origin(db);
 
@@ -627,12 +637,17 @@ impl<'db> ClassType<'db> {
             return true;
         }
 
-        // Optimisation: if either class is `@final`, we only need to do one `is_subclass_of` call.
         if self.is_final(db) {
-            return self.is_subclass_of(db, other);
+            return self
+                .iter_mro(db)
+                .filter_map(ClassBase::into_class)
+                .any(|class| class.class_literal(db).0 == other.class_literal(db).0);
         }
         if other.is_final(db) {
-            return other.is_subclass_of(db, self);
+            return other
+                .iter_mro(db)
+                .filter_map(ClassBase::into_class)
+                .any(|class| class.class_literal(db).0 == self.class_literal(db).0);
         }
 
         // Two disjoint bases can only coexist in an MRO if one is a subclass of the other.
@@ -1041,16 +1056,10 @@ impl<'db> ClassType<'db> {
             return Type::Callable(metaclass_dunder_call_function.into_callable_type(db));
         }
 
-        let dunder_new_function_symbol = self_ty
-            .member_lookup_with_policy(
-                db,
-                "__new__".into(),
-                MemberLookupPolicy::MRO_NO_OBJECT_FALLBACK,
-            )
-            .place;
+        let dunder_new_function_symbol = self_ty.lookup_dunder_new(db);
 
         let dunder_new_signature = dunder_new_function_symbol
-            .ignore_possibly_undefined()
+            .and_then(|place_and_quals| place_and_quals.ignore_possibly_undefined())
             .and_then(|ty| match ty {
                 Type::FunctionLiteral(function) => Some(function.signature(db)),
                 Type::Callable(callable) => Some(callable.signatures(db)),
@@ -1181,7 +1190,11 @@ impl<'db> ClassType<'db> {
     }
 }
 
-fn into_callable_cycle_initial<'db>(_db: &'db dyn Db, _self: ClassType<'db>) -> Type<'db> {
+fn into_callable_cycle_initial<'db>(
+    _db: &'db dyn Db,
+    _id: salsa::Id,
+    _self: ClassType<'db>,
+) -> Type<'db> {
     Type::Never
 }
 
@@ -1294,9 +1307,7 @@ impl<'db> Field<'db> {
     /// Returns true if this field is a `dataclasses.KW_ONLY` sentinel.
     /// <https://docs.python.org/3/library/dataclasses.html#dataclasses.KW_ONLY>
     pub(crate) fn is_kw_only_sentinel(&self, db: &'db dyn Db) -> bool {
-        self.declared_ty
-            .into_nominal_instance()
-            .is_some_and(|instance| instance.has_known_class(db, KnownClass::KwOnly))
+        self.declared_ty.is_instance_of(db, KnownClass::KwOnly)
     }
 }
 
@@ -1334,6 +1345,7 @@ impl get_size2::GetSize for ClassLiteral<'_> {}
 
 fn generic_context_cycle_initial<'db>(
     _db: &'db dyn Db,
+    _id: salsa::Id,
     _self: ClassLiteral<'db>,
 ) -> Option<GenericContext<'db>> {
     None
@@ -1425,7 +1437,7 @@ impl<'db> ClassLiteral<'db> {
         #[derive(Default)]
         struct CollectTypeVars<'db> {
             typevars: RefCell<FxIndexSet<BoundTypeVarInstance<'db>>>,
-            seen_types: RefCell<FxIndexSet<NonAtomicType<'db>>>,
+            recursion_guard: TypeCollector<'db>,
         }
 
         impl<'db> TypeVisitor<'db> for CollectTypeVars<'db> {
@@ -1442,16 +1454,7 @@ impl<'db> ClassLiteral<'db> {
             }
 
             fn visit_type(&self, db: &'db dyn Db, ty: Type<'db>) {
-                match TypeKind::from(ty) {
-                    TypeKind::Atomic => {}
-                    TypeKind::NonAtomic(non_atomic_type) => {
-                        if !self.seen_types.borrow_mut().insert(non_atomic_type) {
-                            // If we have already seen this type, we can skip it.
-                            return;
-                        }
-                        walk_non_atomic_type(db, non_atomic_type, self);
-                    }
-                }
+                walk_type_with_recursion_guard(db, ty, self, &self.recursion_guard);
             }
         }
 
@@ -1981,11 +1984,6 @@ impl<'db> ClassLiteral<'db> {
         name: &str,
         policy: MemberLookupPolicy,
     ) -> PlaceAndQualifiers<'db> {
-        if name == "__mro__" {
-            let tuple_elements = self.iter_mro(db, specialization);
-            return Place::bound(Type::heterogeneous_tuple(db, tuple_elements)).into();
-        }
-
         self.class_member_from_mro(db, name, policy, self.iter_mro(db, specialization))
     }
 
@@ -2172,7 +2170,8 @@ impl<'db> ClassLiteral<'db> {
         });
 
         if member.is_undefined() {
-            if let Some(synthesized_member) = self.own_synthesized_member(db, specialization, name)
+            if let Some(synthesized_member) =
+                self.own_synthesized_member(db, specialization, inherited_generic_context, name)
             {
                 return Member::definitely_declared(synthesized_member);
             }
@@ -2188,6 +2187,7 @@ impl<'db> ClassLiteral<'db> {
         self,
         db: &'db dyn Db,
         specialization: Option<Specialization<'db>>,
+        inherited_generic_context: Option<GenericContext<'db>>,
         name: &str,
     ) -> Option<Type<'db>> {
         let dataclass_params = self.dataclass_params(db);
@@ -2316,7 +2316,7 @@ impl<'db> ClassLiteral<'db> {
 
             let signature = match name {
                 "__new__" | "__init__" => Signature::new_generic(
-                    self.inherited_generic_context(db),
+                    inherited_generic_context.or_else(|| self.inherited_generic_context(db)),
                     Parameters::new(parameters),
                     return_ty,
                 ),
@@ -2698,7 +2698,7 @@ impl<'db> ClassLiteral<'db> {
         name: &str,
         policy: MemberLookupPolicy,
     ) -> PlaceAndQualifiers<'db> {
-        if let Some(member) = self.own_synthesized_member(db, specialization, name) {
+        if let Some(member) = self.own_synthesized_member(db, specialization, None, name) {
             Place::bound(member).into()
         } else {
             KnownClass::TypedDictFallback
@@ -3538,7 +3538,7 @@ impl<'db> From<ClassLiteral<'db>> for ClassType<'db> {
 
 #[salsa::tracked]
 impl<'db> VarianceInferable<'db> for ClassLiteral<'db> {
-    #[salsa::tracked(cycle_initial=crate::types::variance_cycle_initial)]
+    #[salsa::tracked(cycle_initial=crate::types::variance_cycle_initial, heap_size=ruff_memory_usage::heap_size)]
     fn variance_of(self, db: &'db dyn Db, typevar: BoundTypeVarInstance<'db>) -> TypeVarVariance {
         let typevar_in_generic_context = self
             .generic_context(db)

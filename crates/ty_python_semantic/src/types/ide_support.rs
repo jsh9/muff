@@ -290,7 +290,9 @@ impl<'db> AllMembers<'db> {
                             }
                             Type::ClassLiteral(class) if class.is_protocol(db) => continue,
                             Type::KnownInstance(
-                                KnownInstanceType::TypeVar(_) | KnownInstanceType::TypeAliasType(_),
+                                KnownInstanceType::TypeVar(_)
+                                | KnownInstanceType::TypeAliasType(_)
+                                | KnownInstanceType::UnionType(_),
                             ) => continue,
                             Type::Dynamic(DynamicType::TodoTypeAlias) => continue,
                             _ => {}
@@ -615,6 +617,7 @@ pub fn definitions_for_name<'db>(
         };
         find_symbol_in_scope(db, builtins_scope, name_str)
             .into_iter()
+            .filter(|def| def.is_reexported(db))
             .flat_map(|def| {
                 resolve_definition(
                     db,

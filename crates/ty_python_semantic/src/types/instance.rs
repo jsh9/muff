@@ -88,10 +88,18 @@ impl<'db> Type<'db> {
         Type::NominalInstance(NominalInstanceType(NominalInstanceInner::ExactTuple(tuple)))
     }
 
-    pub(crate) const fn into_nominal_instance(self) -> Option<NominalInstanceType<'db>> {
+    pub(crate) const fn as_nominal_instance(self) -> Option<NominalInstanceType<'db>> {
         match self {
             Type::NominalInstance(instance_type) => Some(instance_type),
             _ => None,
+        }
+    }
+
+    /// Return `true` if `self` is a nominal instance of the given known class.
+    pub(crate) fn is_instance_of(self, db: &'db dyn Db, known_class: KnownClass) -> bool {
+        match self {
+            Type::NominalInstance(instance) => instance.class(db).is_known(db, known_class),
+            _ => false,
         }
     }
 
@@ -649,7 +657,11 @@ impl<'db> ProtocolInstanceType<'db> {
     /// normalised to `object`.
     pub(super) fn is_equivalent_to_object(self, db: &'db dyn Db) -> bool {
         #[salsa::tracked(cycle_initial=initial, heap_size=ruff_memory_usage::heap_size)]
-        fn inner<'db>(db: &'db dyn Db, protocol: ProtocolInstanceType<'db>, _: ()) -> bool {
+        fn is_equivalent_to_object_inner<'db>(
+            db: &'db dyn Db,
+            protocol: ProtocolInstanceType<'db>,
+            _: (),
+        ) -> bool {
             Type::object()
                 .satisfies_protocol(
                     db,
@@ -662,11 +674,16 @@ impl<'db> ProtocolInstanceType<'db> {
                 .is_always_satisfied(db)
         }
 
-        fn initial<'db>(_db: &'db dyn Db, _value: ProtocolInstanceType<'db>, _: ()) -> bool {
+        fn initial<'db>(
+            _db: &'db dyn Db,
+            _id: salsa::Id,
+            _value: ProtocolInstanceType<'db>,
+            _: (),
+        ) -> bool {
             true
         }
 
-        inner(db, self, ())
+        is_equivalent_to_object_inner(db, self, ())
     }
 
     /// Return a "normalized" version of this `Protocol` type.
