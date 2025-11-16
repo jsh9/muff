@@ -4,7 +4,7 @@ use ruff_python_ast as ast;
 use super::{DeferredExpressionState, TypeInferenceBuilder};
 use crate::types::diagnostic::{
     self, INVALID_TYPE_FORM, NON_SUBSCRIPTABLE, report_invalid_argument_number_to_special_form,
-    report_invalid_arguments_to_annotated, report_invalid_arguments_to_callable,
+    report_invalid_arguments_to_callable,
 };
 use crate::types::signatures::Signature;
 use crate::types::string_annotation::parse_string_annotation;
@@ -20,7 +20,22 @@ use crate::types::{
 impl<'db> TypeInferenceBuilder<'db, '_> {
     /// Infer the type of a type expression.
     pub(super) fn infer_type_expression(&mut self, expression: &ast::Expr) -> Type<'db> {
+        let previous_deferred_state = self.deferred_state;
+
+        // `DeferredExpressionState::InStringAnnotation` takes precedence over other states.
+        // However, if it's not a stringified annotation, we must still ensure that annotation expressions
+        // are always deferred in stub files.
+        match previous_deferred_state {
+            DeferredExpressionState::None => {
+                if self.in_stub() {
+                    self.deferred_state = DeferredExpressionState::Deferred;
+                }
+            }
+            DeferredExpressionState::InStringAnnotation(_) | DeferredExpressionState::Deferred => {}
+        }
         let mut ty = self.infer_type_expression_no_store(expression);
+        self.deferred_state = previous_deferred_state;
+
         let divergent = Type::divergent(Some(self.scope()));
         if ty.has_divergent_type(self.db(), divergent) {
             ty = divergent;
@@ -318,7 +333,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
 
             ast::Expr::If(if_expression) => {
-                self.infer_if_expression(if_expression);
+                self.infer_if_expression(if_expression, TypeContext::default());
                 self.report_invalid_type_expression(
                     expression,
                     format_args!("`if` expressions are not allowed in type expressions"),
@@ -814,12 +829,26 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     self.infer_type_expression(slice);
                     todo_type!("Generic specialization of types.UnionType")
                 }
-                KnownInstanceType::Literal(ty) => {
+                KnownInstanceType::Literal(ty) | KnownInstanceType::TypeGenericAlias(ty) => {
                     self.infer_type_expression(slice);
                     if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
                         builder.into_diagnostic(format_args!(
                             "`{ty}` is not a generic class",
-                            ty = ty.to_union(self.db()).display(self.db())
+                            ty = ty.inner(self.db()).display(self.db())
+                        ));
+                    }
+                    Type::unknown()
+                }
+                KnownInstanceType::Annotated(_) => {
+                    self.infer_type_expression(slice);
+                    todo_type!("Generic specialization of typing.Annotated")
+                }
+                KnownInstanceType::NewType(newtype) => {
+                    self.infer_type_expression(&subscript.slice);
+                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
+                        builder.into_diagnostic(format_args!(
+                            "`{}` is a `NewType` and cannot be specialized",
+                            newtype.name(self.db())
                         ));
                     }
                     Type::unknown()
@@ -900,7 +929,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         ty
     }
 
-    fn infer_parameterized_special_form_type_expression(
+    pub(crate) fn infer_parameterized_special_form_type_expression(
         &mut self,
         subscript: &ast::ExprSubscript,
         special_form: SpecialFormType,
@@ -909,36 +938,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let arguments_slice = &*subscript.slice;
         match special_form {
             SpecialFormType::Annotated => {
-                let ast::Expr::Tuple(ast::ExprTuple {
-                    elts: arguments, ..
-                }) = arguments_slice
-                else {
-                    report_invalid_arguments_to_annotated(&self.context, subscript);
-
-                    // `Annotated[]` with less than two arguments is an error at runtime.
-                    // However, we still treat `Annotated[T]` as `T` here for the purpose of
-                    // giving better diagnostics later on.
-                    // Pyright also does this. Mypy doesn't; it falls back to `Any` instead.
-                    return self.infer_type_expression(arguments_slice);
-                };
-
-                if arguments.len() < 2 {
-                    report_invalid_arguments_to_annotated(&self.context, subscript);
-                }
-
-                let [type_expr, metadata @ ..] = &arguments[..] else {
-                    for argument in arguments {
-                        self.infer_expression(argument, TypeContext::default());
-                    }
-                    self.store_expression_type(arguments_slice, Type::unknown());
-                    return Type::unknown();
-                };
-
-                for element in metadata {
-                    self.infer_expression(element, TypeContext::default());
-                }
-
-                let ty = self.infer_type_expression(type_expr);
+                let ty = self
+                    .infer_subscript_load_impl(
+                        Type::SpecialForm(SpecialFormType::Annotated),
+                        subscript,
+                    )
+                    .in_type_expression(db, self.scope(), None)
+                    .unwrap_or_else(|err| err.into_fallback_type(&self.context, subscript, true));
                 self.store_expression_type(arguments_slice, ty);
                 ty
             }
@@ -1453,8 +1459,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             return Ok(value_ty);
                         }
                     }
-                    Type::KnownInstance(KnownInstanceType::Literal(list)) => {
-                        return Ok(list.to_union(self.db()));
+                    Type::KnownInstance(KnownInstanceType::Literal(ty)) => {
+                        return Ok(ty.inner(self.db()));
                     }
                     // `Literal[SomeEnum.Member]`
                     Type::EnumLiteral(_) => {

@@ -322,7 +322,7 @@ class C[T, U]:
 class D[V](C[V, int]):
     def __init__(self, x: V) -> None: ...
 
-reveal_type(D(1))  # revealed: D[int]
+reveal_type(D(1))  # revealed: D[Literal[1]]
 ```
 
 ### Generic class inherits `__init__` from generic base class
@@ -334,8 +334,8 @@ class C[T, U]:
 class D[T, U](C[T, U]):
     pass
 
-reveal_type(C(1, "str"))  # revealed: C[int, str]
-reveal_type(D(1, "str"))  # revealed: D[int, str]
+reveal_type(C(1, "str"))  # revealed: C[Literal[1], Literal["str"]]
+reveal_type(D(1, "str"))  # revealed: D[Literal[1], Literal["str"]]
 ```
 
 ### Generic class inherits `__init__` from `dict`
@@ -358,7 +358,7 @@ context. But from the user's point of view, this is another example of the above
 ```py
 class C[T, U](tuple[T, U]): ...
 
-reveal_type(C((1, 2)))  # revealed: C[int, int]
+reveal_type(C((1, 2)))  # revealed: C[Literal[1], Literal[2]]
 ```
 
 ### Upcasting a `tuple` to its `Sequence` supertype
@@ -375,9 +375,7 @@ def test_seq[T](x: Sequence[T]) -> Sequence[T]:
 def func8(t1: tuple[complex, list[int]], t2: tuple[int, *tuple[str, ...]], t3: tuple[()]):
     reveal_type(test_seq(t1))  # revealed: Sequence[int | float | complex | list[int]]
     reveal_type(test_seq(t2))  # revealed: Sequence[int | str]
-
-    # TODO: this should be `Sequence[Never]`
-    reveal_type(test_seq(t3))  # revealed: Sequence[Unknown]
+    reveal_type(test_seq(t3))  # revealed: Sequence[Never]
 ```
 
 ### `__init__` is itself generic
@@ -436,6 +434,17 @@ C[int](12)
 C[None]("string")  # error: [no-matching-overload]
 C[None](b"bytes")  # error: [no-matching-overload]
 C[None](12)
+
+class D[T, U]:
+    @overload
+    def __init__(self: "D[str, U]", u: U) -> None: ...
+    @overload
+    def __init__(self, t: T, u: U) -> None: ...
+    def __init__(self, *args) -> None: ...
+
+reveal_type(D("string"))  # revealed: D[str, Literal["string"]]
+reveal_type(D(1))  # revealed: D[str, Literal[1]]
+reveal_type(D(1, "string"))  # revealed: D[Literal[1], Literal["string"]]
 ```
 
 ### Synthesized methods with dataclasses

@@ -82,7 +82,7 @@ def _(x: int | str | bytes | memoryview | range):
     if isinstance(x, int | str):
         reveal_type(x)  # revealed: int | str
     elif isinstance(x, bytes | memoryview):
-        reveal_type(x)  # revealed: bytes | memoryview[Unknown]
+        reveal_type(x)  # revealed: bytes | memoryview[int]
     else:
         reveal_type(x)  # revealed: range
 ```
@@ -104,16 +104,25 @@ Except for the `None` special case mentioned above, narrowing can only take plac
 the PEP-604 union are class literals. If any elements are generic aliases or other types, the
 `isinstance()` call may fail at runtime, so no narrowing can take place:
 
+<!-- snapshot-diagnostics -->
+
 ```toml
 [environment]
 python-version = "3.10"
 ```
 
 ```py
+from typing import Any, Literal, NamedTuple
+
 def _(x: int | list[int] | bytes):
-    # TODO: this fails at runtime; we should emit a diagnostic
-    # (requires special-casing of the `isinstance()` signature)
-    if isinstance(x, int | list[int]):
+    # error: [invalid-argument-type]
+    if isinstance(x, list[int] | int):
+        reveal_type(x)  # revealed: int | list[int] | bytes
+    # error: [invalid-argument-type]
+    elif isinstance(x, Literal[42] | list[int] | bytes):
+        reveal_type(x)  # revealed: int | list[int] | bytes
+    # error: [invalid-argument-type]
+    elif isinstance(x, Any | NamedTuple | list[int]):
         reveal_type(x)  # revealed: int | list[int] | bytes
     else:
         reveal_type(x)  # revealed: int | list[int] | bytes
@@ -136,6 +145,25 @@ def _(x: int | str | bytes):
         reveal_type(x)  # revealed: (int & Unknown) | (str & Unknown) | (bytes & Unknown)
     else:
         reveal_type(x)  # revealed: (int & Unknown) | (str & Unknown) | (bytes & Unknown)
+```
+
+## `classinfo` is a `typing.py` special form
+
+Certain special forms in `typing.py` are aliases to classes elsewhere in the standard library; these
+can be used in `isinstance()` and `issubclass()` checks. We support narrowing using them:
+
+```py
+import typing as t
+
+def f(x: dict[str, int] | list[str], y: object):
+    if isinstance(x, t.Dict):
+        reveal_type(x)  # revealed: dict[str, int]
+    else:
+        reveal_type(x)  # revealed: list[str]
+
+    if isinstance(y, t.Callable):
+        # TODO: a better top-materialization for `Callable`s (https://github.com/astral-sh/ty/issues/1426)
+        reveal_type(y)  # revealed: () -> object
 ```
 
 ## Class types
@@ -214,11 +242,11 @@ def _(flag: bool):
 def _(flag: bool):
     x = 1 if flag else "a"
 
-    # error: [invalid-argument-type] "Argument to function `isinstance` is incorrect: Expected `type | UnionType | tuple[Unknown, ...]`, found `Literal["a"]"
+    # error: [invalid-argument-type] "Argument to function `isinstance` is incorrect: Expected `type | UnionType | tuple[Divergent, ...]`, found `Literal["a"]"
     if isinstance(x, "a"):
         reveal_type(x)  # revealed: Literal[1, "a"]
 
-    # error: [invalid-argument-type] "Argument to function `isinstance` is incorrect: Expected `type | UnionType | tuple[Unknown, ...]`, found `Literal["int"]"
+    # error: [invalid-argument-type] "Argument to function `isinstance` is incorrect: Expected `type | UnionType | tuple[Divergent, ...]`, found `Literal["int"]"
     if isinstance(x, "int"):
         reveal_type(x)  # revealed: Literal[1, "a"]
 ```
