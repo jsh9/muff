@@ -28,11 +28,13 @@ def my_function(
     pass
 ```
 
+(The actual code diff between Muff and Ruff is [here](https://github.com/astral-sh/ruff/compare/main...jsh9:muff:main).)
+
 This greatly improves readability, especially when syntax highlighting isn't available (such as in stack traces).
 
 In fact, [PEP-8 recommends this style](https://peps.python.org/pep-0008/#indentation), saying that "Add 4 spaces (an extra level of indentation) to distinguish arguments from the rest."
 
-Currently (August 2025) there is [a 1.8-year-old open issue(https://github.com/astral-sh/ruff/issues/8360) in Ruff to request this formatting style. There are no known timeline for this issue, which is why I created this fork.
+Currently (November 2025) there is [a 2-year-old open issue](https://github.com/astral-sh/ruff/issues/8360) in Ruff to request this formatting style. There are no known timeline for this issue, which is why I created this fork.
 
 If/when that issue gets implemented and merged, I will deprecate this fork.
 
