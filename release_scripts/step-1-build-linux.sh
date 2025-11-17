@@ -16,18 +16,13 @@ install_package() {
     local description=$2
 
     echo "📦 $description is required but not installed"
-    read -p "Install $package? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if sudo apt update && sudo apt install -y "$package"; then
-            echo "✅ Successfully installed $package"
-            return 0
-        else
-            echo "❌ Failed to install $package"
-            return 1
-        fi
+    echo "👍 Automatically installing $package (auto-confirm enabled)"
+
+    if sudo apt update && sudo apt install -y "$package"; then
+        echo "✅ Successfully installed $package"
+        return 0
     else
-        echo "❌ Cannot continue without $description"
+        echo "❌ Failed to install $package"
         return 1
     fi
 }
