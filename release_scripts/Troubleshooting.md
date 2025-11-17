@@ -33,3 +33,9 @@ clang -E -x c - -v </dev/null
 
 Look under `#include <...> search starts here:` — if `/usr/include` isn’t listed, something’s wrong with your clang install.
 
+## 2. `link.exe` not found (Windows)
+
+You need to install Visual Studio (not Visual Studio Code) on your Windows 
+computer. Download the installer from Microsoft website.
+
+During installation, choose "Desktop development with C++".
