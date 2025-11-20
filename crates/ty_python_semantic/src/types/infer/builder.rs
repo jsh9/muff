@@ -922,7 +922,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 let kw_only_sentinel_fields: Vec<_> = class
                     .fields(self.db(), specialization, field_policy)
-                    .into_iter()
+                    .iter()
                     .filter_map(|(name, field)| {
                         field.is_kw_only_sentinel(self.db()).then_some(name)
                     })
@@ -3691,7 +3691,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // or a dynamic type like `Any`. We can do this by checking assignability to `LiteralString`,
                     // but we need to exclude `LiteralString` itself. This check would technically allow weird key
                     // types like `LiteralString & Any` to pass, but it does not need to be perfect. We would just
-                    // fail to provide the "can only be subscripted with string literal keys" hint in that case.
+                    // fail to provide the "can only be subscripted with a string literal key" hint in that case.
 
                     if slice_ty.is_dynamic() {
                         return true;
@@ -3813,18 +3813,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                             let assigned_d = rhs_value_ty.display(db);
                                             let object_d = object_ty.display(db);
 
+                                            let mut diagnostic = builder.into_diagnostic(format_args!(
+                                                    "Invalid subscript assignment with key of type `{}` and value of \
+                                                     type `{assigned_d}` on object of type `{object_d}`",
+                                                    slice_ty.display(db),
+                                                ));
+
                                             // Special diagnostic for dictionaries
                                             if let Some([expected_key_ty, expected_value_ty]) =
                                                 object_ty
                                                     .known_specialization(db, KnownClass::Dict)
                                                     .map(|s| s.types(db))
                                             {
-                                                let mut diagnostic = builder.into_diagnostic(format_args!(
-                                                    "Invalid subscript assignment with key of type `{}` and value of \
-                                                     type `{assigned_d}` on object of type `{object_d}`",
-                                                    slice_ty.display(db),
-                                                ));
-
                                                 if !slice_ty.is_assignable_to(db, *expected_key_ty)
                                                 {
                                                     diagnostic.annotate(
@@ -3851,17 +3851,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                                             )),
                                                     );
                                                 }
-
-                                                attach_original_type_info(&mut diagnostic);
-                                            } else {
-                                                let mut diagnostic = builder.into_diagnostic(format_args!(
-                                                    "Method `__setitem__` of type `{}` cannot be called with \
-                                                    a key of type `{}` and a value of type `{assigned_d}` on object of type `{object_d}`",
-                                                    bindings.callable_type().display(db),
-                                                    slice_ty.display(db),
-                                                ));
-                                                attach_original_type_info(&mut diagnostic);
                                             }
+
+                                            attach_original_type_info(&mut diagnostic);
                                         }
                                     }
                                 }
@@ -3892,19 +3884,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 ));
                                 attach_original_type_info(&mut diagnostic);
 
-                                // Use `KnownClass` as a crude proxy for checking if this is not a user-defined class. Otherwise,
-                                // we end up suggesting things like "Consider adding a `__setitem__` method to `None`".
+                                // If it's a user-defined class, suggest adding a `__setitem__` method.
                                 if object_ty
                                     .as_nominal_instance()
-                                    .is_some_and(|instance| instance.class(db).known(db).is_some())
+                                    .and_then(|instance| {
+                                        file_to_module(
+                                            db,
+                                            instance.class(db).class_literal(db).0.file(db),
+                                        )
+                                    })
+                                    .and_then(|module| module.search_path(db))
+                                    .is_some_and(crate::SearchPath::is_first_party)
                                 {
-                                    diagnostic.info(format_args!(
-                                        "`{}` does not have a `__setitem__` method.",
+                                    diagnostic.help(format_args!(
+                                        "Consider adding a `__setitem__` method to `{}`.",
                                         object_ty.display(db),
                                     ));
                                 } else {
-                                    diagnostic.help(format_args!(
-                                        "Consider adding a `__setitem__` method to `{}`.",
+                                    diagnostic.info(format_args!(
+                                        "`{}` does not have a `__setitem__` method.",
                                         object_ty.display(db),
                                     ));
                                 }
@@ -7763,7 +7761,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.infer_expression(target, TypeContext::default());
 
-        self.add_binding(named.into(), definition, |builder, tcx| {
+        self.add_binding(named.target.as_ref().into(), definition, |builder, tcx| {
             builder.infer_expression(value, tcx)
         })
     }
@@ -7914,6 +7912,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ty
             });
 
+        if callable_type.is_notimplemented(self.db()) {
+            if let Some(builder) = self
+                .context
+                .report_lint(&CALL_NON_CALLABLE, call_expression)
+            {
+                let mut diagnostic = builder.into_diagnostic("`NotImplemented` is not callable");
+                diagnostic.annotate(
+                    self.context
+                        .secondary(&**func)
+                        .message("Did you mean `NotImplementedError`?"),
+                );
+                diagnostic.set_concise_message(
+                    "`NotImplemented` is not callable - did you mean `NotImplementedError`?",
+                );
+            }
+            return Type::unknown();
+        }
+
         // Special handling for `TypedDict` method calls
         if let ast::Expr::Attribute(ast::ExprAttribute { value, attr, .. }) = func.as_ref() {
             let value_type = self.expression_type(value);
@@ -7956,7 +7972,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     Type::TypedDict(typed_dict_ty),
                                     None,
                                     key_ty,
-                                    &items,
+                                    items,
                                 );
                                 // Return `Unknown` to prevent the overload system from generating its own error
                                 return Type::unknown();
@@ -9508,7 +9524,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     KnownInstanceType::UnionType(_)
                     | KnownInstanceType::Literal(_)
                     | KnownInstanceType::Annotated(_)
-                    | KnownInstanceType::TypeGenericAlias(_),
+                    | KnownInstanceType::TypeGenericAlias(_)
+                    | KnownInstanceType::Callable(_)
+                    | KnownInstanceType::TypeVar(_),
                 ),
                 Type::ClassLiteral(..)
                 | Type::SubclassOf(..)
@@ -9518,7 +9536,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     KnownInstanceType::UnionType(_)
                     | KnownInstanceType::Literal(_)
                     | KnownInstanceType::Annotated(_)
-                    | KnownInstanceType::TypeGenericAlias(_),
+                    | KnownInstanceType::TypeGenericAlias(_)
+                    | KnownInstanceType::Callable(_)
+                    | KnownInstanceType::TypeVar(_),
                 ),
                 ast::Operator::BitOr,
             ) if pep_604_unions_allowed() => {
@@ -10829,6 +10849,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     InternedType::new(self.db(), argument_ty),
                 ));
             }
+            Type::SpecialForm(SpecialFormType::Callable) => {
+                let callable = self
+                    .infer_callable_type(subscript)
+                    .as_callable()
+                    .expect("always returns Type::Callable");
+
+                return Type::KnownInstance(KnownInstanceType::Callable(callable));
+            }
             // `typing` special forms with a single generic argument
             Type::SpecialForm(
                 special_form @ (SpecialFormType::List
@@ -10917,6 +10945,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .to_specialized_class_type(self.db(), [first_ty, second_ty])
                     .map(Type::from)
                     .unwrap_or_else(Type::unknown);
+            }
+            Type::KnownInstance(KnownInstanceType::UnionType(_)) => {
+                return todo_type!("Specialization of union type alias");
             }
             _ => {}
         }
@@ -11287,7 +11318,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 value_ty,
                                 None,
                                 slice_ty,
-                                &typed_dict.items(db),
+                                typed_dict.items(db),
                             );
                         } else {
                             if let Some(builder) =
