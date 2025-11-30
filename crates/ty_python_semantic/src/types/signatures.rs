@@ -174,6 +174,22 @@ impl<'db> CallableSignature<'db> {
         )
     }
 
+    pub(super) fn recursive_type_normalized_impl(
+        &self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Option<Self> {
+        Some(Self {
+            overloads: self
+                .overloads
+                .iter()
+                .map(|signature| signature.recursive_type_normalized_impl(db, div, nested, visitor))
+                .collect::<Option<SmallVec<_>>>()?,
+        })
+    }
+
     pub(crate) fn apply_type_mapping_impl<'a>(
         &self,
         db: &'db dyn Db,
@@ -209,6 +225,19 @@ impl<'db> CallableSignature<'db> {
                 .overloads
                 .iter()
                 .map(|signature| signature.bind_self(db, self_type))
+                .collect(),
+        }
+    }
+
+    /// Replaces any occurrences of `typing.Self` in the parameter and return annotations with the
+    /// given type. (Does not bind the `self` parameter; to do that, use
+    /// [`bind_self`][Self::bind_self].)
+    pub(crate) fn apply_self(&self, db: &'db dyn Db, self_type: Type<'db>) -> Self {
+        Self {
+            overloads: self
+                .overloads
+                .iter()
+                .map(|signature| signature.apply_self(db, self_type))
                 .collect(),
         }
     }
@@ -529,15 +558,49 @@ impl<'db> Signature<'db> {
             // Discard the definition when normalizing, so that two equivalent signatures
             // with different `Definition`s share the same Salsa ID when normalized
             definition: None,
-            parameters: self
-                .parameters
-                .iter()
-                .map(|param| param.normalized_impl(db, visitor))
-                .collect(),
+            parameters: Parameters::new(
+                db,
+                self.parameters
+                    .iter()
+                    .map(|param| param.normalized_impl(db, visitor)),
+            ),
             return_ty: self
                 .return_ty
                 .map(|return_ty| return_ty.normalized_impl(db, visitor)),
         }
+    }
+
+    pub(super) fn recursive_type_normalized_impl(
+        &self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Option<Self> {
+        let return_ty = match self.return_ty {
+            Some(return_ty) if nested => {
+                Some(return_ty.recursive_type_normalized_impl(db, div, true, visitor)?)
+            }
+            Some(return_ty) => Some(
+                return_ty
+                    .recursive_type_normalized_impl(db, div, true, visitor)
+                    .unwrap_or(div),
+            ),
+            None => None,
+        };
+        let parameters = {
+            let mut parameters = Vec::with_capacity(self.parameters.len());
+            for param in &self.parameters {
+                parameters.push(param.recursive_type_normalized_impl(db, div, nested, visitor)?);
+            }
+            Parameters::new(db, parameters)
+        };
+        Some(Self {
+            generic_context: self.generic_context,
+            definition: self.definition,
+            parameters,
+            return_ty,
+        })
     }
 
     pub(crate) fn apply_type_mapping_impl<'a>(
@@ -603,7 +666,7 @@ impl<'db> Signature<'db> {
             parameters.next();
         }
 
-        let mut parameters = Parameters::new(parameters);
+        let mut parameters = Parameters::new(db, parameters);
         let mut return_ty = self.return_ty;
         if let Some(self_type) = self_type {
             parameters = parameters.apply_type_mapping_impl(
@@ -620,6 +683,28 @@ impl<'db> Signature<'db> {
                 )
             });
         }
+        Self {
+            generic_context: self.generic_context,
+            definition: self.definition,
+            parameters,
+            return_ty,
+        }
+    }
+
+    pub(crate) fn apply_self(&self, db: &'db dyn Db, self_type: Type<'db>) -> Self {
+        let parameters = self.parameters.apply_type_mapping_impl(
+            db,
+            &TypeMapping::BindSelf(self_type),
+            TypeContext::default(),
+            &ApplyTypeMappingVisitor::default(),
+        );
+        let return_ty = self.return_ty.map(|ty| {
+            ty.apply_type_mapping(
+                db,
+                &TypeMapping::BindSelf(self_type),
+                TypeContext::default(),
+            )
+        });
         Self {
             generic_context: self.generic_context,
             definition: self.definition,
@@ -1263,7 +1348,10 @@ pub(crate) struct Parameters<'db> {
 }
 
 impl<'db> Parameters<'db> {
-    pub(crate) fn new(parameters: impl IntoIterator<Item = Parameter<'db>>) -> Self {
+    pub(crate) fn new(
+        _db: &'db dyn Db,
+        parameters: impl IntoIterator<Item = Parameter<'db>>,
+    ) -> Self {
         let value: Vec<Parameter<'db>> = parameters.into_iter().collect();
         let is_gradual = value.len() == 2
             && value
@@ -1517,6 +1605,7 @@ impl<'db> Parameters<'db> {
         });
 
         Self::new(
+            db,
             positional_only
                 .into_iter()
                 .chain(positional_or_keyword)
@@ -1631,12 +1720,6 @@ impl<'db, 'a> IntoIterator for &'a Parameters<'db> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.value.iter()
-    }
-}
-
-impl<'db> FromIterator<Parameter<'db>> for Parameters<'db> {
-    fn from_iter<T: IntoIterator<Item = Parameter<'db>>>(iter: T) -> Self {
-        Self::new(iter)
     }
 }
 
@@ -1816,6 +1899,85 @@ impl<'db> Parameter<'db> {
             kind,
             form: *form,
         }
+    }
+
+    pub(super) fn recursive_type_normalized_impl(
+        &self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Option<Self> {
+        let Parameter {
+            annotated_type,
+            inferred_annotation,
+            kind,
+            form,
+        } = self;
+
+        let annotated_type = match annotated_type {
+            Some(ty) if nested => Some(ty.recursive_type_normalized_impl(db, div, true, visitor)?),
+            Some(ty) => Some(
+                ty.recursive_type_normalized_impl(db, div, true, visitor)
+                    .unwrap_or(div),
+            ),
+            None => None,
+        };
+
+        let kind = match kind {
+            ParameterKind::PositionalOnly { name, default_type } => ParameterKind::PositionalOnly {
+                name: name.clone(),
+                default_type: match default_type {
+                    Some(ty) if nested => {
+                        Some(ty.recursive_type_normalized_impl(db, div, true, visitor)?)
+                    }
+                    Some(ty) => Some(
+                        ty.recursive_type_normalized_impl(db, div, true, visitor)
+                            .unwrap_or(div),
+                    ),
+                    None => None,
+                },
+            },
+            ParameterKind::PositionalOrKeyword { name, default_type } => {
+                ParameterKind::PositionalOrKeyword {
+                    name: name.clone(),
+                    default_type: match default_type {
+                        Some(ty) if nested => {
+                            Some(ty.recursive_type_normalized_impl(db, div, true, visitor)?)
+                        }
+                        Some(ty) => Some(
+                            ty.recursive_type_normalized_impl(db, div, true, visitor)
+                                .unwrap_or(div),
+                        ),
+                        None => None,
+                    },
+                }
+            }
+            ParameterKind::KeywordOnly { name, default_type } => ParameterKind::KeywordOnly {
+                name: name.clone(),
+                default_type: match default_type {
+                    Some(ty) if nested => {
+                        Some(ty.recursive_type_normalized_impl(db, div, true, visitor)?)
+                    }
+                    Some(ty) => Some(
+                        ty.recursive_type_normalized_impl(db, div, true, visitor)
+                            .unwrap_or(div),
+                    ),
+                    None => None,
+                },
+            },
+            ParameterKind::Variadic { name } => ParameterKind::Variadic { name: name.clone() },
+            ParameterKind::KeywordVariadic { name } => {
+                ParameterKind::KeywordVariadic { name: name.clone() }
+            }
+        };
+
+        Some(Self {
+            annotated_type,
+            inferred_annotation: *inferred_annotation,
+            kind,
+            form: *form,
+        })
     }
 
     fn from_node_and_kind(

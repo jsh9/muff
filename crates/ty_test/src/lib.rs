@@ -12,6 +12,7 @@ use ruff_db::panic::{PanicError, catch_unwind};
 use ruff_db::parsed::parsed_module;
 use ruff_db::system::{DbWithWritableSystem as _, SystemPath, SystemPathBuf};
 use ruff_db::testing::{setup_logging, setup_logging_with_filter};
+use ruff_diagnostics::Applicability;
 use ruff_source_file::{LineIndex, OneIndexed};
 use std::backtrace::BacktraceStatus;
 use std::fmt::{Display, Write};
@@ -641,7 +642,10 @@ fn create_diagnostic_snapshot(
     test: &parser::MarkdownTest,
     diagnostics: impl IntoIterator<Item = Diagnostic>,
 ) -> String {
-    let display_config = DisplayDiagnosticConfig::default().color(false);
+    let display_config = DisplayDiagnosticConfig::default()
+        .color(false)
+        .show_fix_diff(true)
+        .with_fix_applicability(Applicability::DisplayOnly);
 
     let mut snapshot = String::new();
     writeln!(snapshot).unwrap();

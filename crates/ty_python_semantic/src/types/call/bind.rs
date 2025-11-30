@@ -39,7 +39,7 @@ use crate::types::{
     DataclassParams, FieldInstance, KnownBoundMethodType, KnownClass, KnownInstanceType,
     MemberLookupPolicy, NominalInstanceType, PropertyInstanceType, SpecialFormType,
     TrackedConstraintSet, TypeAliasType, TypeContext, TypeVarVariance, UnionBuilder, UnionType,
-    WrapperDescriptorKind, enums, ide_support, infer_isolated_expression, todo_type,
+    WrapperDescriptorKind, enums, ide_support, todo_type,
 };
 use ruff_db::diagnostic::{Annotation, Diagnostic, SubDiagnostic, SubDiagnosticSeverity};
 use ruff_python_ast::{self as ast, ArgOrKeyword, PythonVersion};
@@ -1118,6 +1118,11 @@ impl<'db> Bindings<'db> {
                             }
                         }
 
+                        Some(KnownFunction::NamedTuple) => {
+                            overload
+                                .set_return_type(todo_type!("Support for functional `namedtuple`"));
+                        }
+
                         _ => {
                             // Ideally, either the implementation, or exactly one of the overloads
                             // of the function can have the dataclass_transform decorator applied.
@@ -1350,7 +1355,7 @@ impl<'db> Bindings<'db> {
                     },
 
                     Type::SpecialForm(SpecialFormType::TypedDict) => {
-                        overload.set_return_type(todo_type!("Support for `TypedDict`"));
+                        overload.set_return_type(todo_type!("Support for functional `TypedDict`"));
                     }
 
                     // Not a special case
@@ -3586,12 +3591,15 @@ impl CallableBindingSnapshotter {
 /// Describes a callable for the purposes of diagnostics.
 #[derive(Debug)]
 pub(crate) struct CallableDescription<'a> {
-    name: &'a str,
-    kind: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) kind: &'a str,
 }
 
 impl<'db> CallableDescription<'db> {
-    fn new(db: &'db dyn Db, callable_type: Type<'db>) -> Option<CallableDescription<'db>> {
+    pub(crate) fn new(
+        db: &'db dyn Db,
+        callable_type: Type<'db>,
+    ) -> Option<CallableDescription<'db>> {
         match callable_type {
             Type::FunctionLiteral(function) => Some(CallableDescription {
                 kind: "function",
@@ -3798,23 +3806,6 @@ impl<'db> BindingError<'db> {
                 let range = Self::get_node(node, *argument_index);
                 let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, range) else {
                     return;
-                };
-
-                // Re-infer the argument type of call expressions, ignoring the type context for more
-                // precise error messages.
-                let provided_ty = match Self::get_argument_node(node, *argument_index) {
-                    None => *provided_ty,
-
-                    // Ignore starred arguments, as those are difficult to re-infer.
-                    Some(
-                        ast::ArgOrKeyword::Arg(ast::Expr::Starred(_))
-                        | ast::ArgOrKeyword::Keyword(ast::Keyword { arg: None, .. }),
-                    ) => *provided_ty,
-
-                    Some(
-                        ast::ArgOrKeyword::Arg(value)
-                        | ast::ArgOrKeyword::Keyword(ast::Keyword { value, .. }),
-                    ) => infer_isolated_expression(context.db(), context.scope(), value),
                 };
 
                 let provided_ty_display = provided_ty.display(context.db());

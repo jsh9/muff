@@ -13,7 +13,7 @@ use crate::types::class::ClassType;
 use crate::types::class_base::ClassBase;
 use crate::types::constraints::ConstraintSet;
 use crate::types::instance::{Protocol, ProtocolInstanceType};
-use crate::types::signatures::{Parameter, Parameters, Signature};
+use crate::types::signatures::Parameters;
 use crate::types::tuple::{TupleSpec, TupleType, walk_tuple_type};
 use crate::types::visitor::{TypeCollector, TypeVisitor, walk_type_with_recursion_guard};
 use crate::types::{
@@ -411,39 +411,6 @@ impl<'db> GenericContext<'db> {
         self.variables_inner(db).len()
     }
 
-    pub(crate) fn signature(self, db: &'db dyn Db) -> Signature<'db> {
-        let parameters = Parameters::new(
-            self.variables(db)
-                .map(|typevar| Self::parameter_from_typevar(db, typevar)),
-        );
-        Signature::new(parameters, None)
-    }
-
-    fn parameter_from_typevar(
-        db: &'db dyn Db,
-        bound_typevar: BoundTypeVarInstance<'db>,
-    ) -> Parameter<'db> {
-        let typevar = bound_typevar.typevar(db);
-        let mut parameter = Parameter::positional_only(Some(typevar.name(db).clone()));
-        match typevar.bound_or_constraints(db) {
-            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
-                // TODO: This should be a type form.
-                parameter = parameter.with_annotated_type(bound);
-            }
-            Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
-                // TODO: This should be a new type variant where only these exact types are
-                // assignable, and not subclasses of them, nor a union of them.
-                parameter = parameter
-                    .with_annotated_type(UnionType::from_elements(db, constraints.elements(db)));
-            }
-            None => {}
-        }
-        if let Some(default_ty) = bound_typevar.default_type(db) {
-            parameter = parameter.with_default_type(default_ty);
-        }
-        parameter
-    }
-
     pub(crate) fn default_specialization(
         self,
         db: &'db dyn Db,
@@ -522,14 +489,15 @@ impl<'db> GenericContext<'db> {
     /// Creates a specialization of this generic context. Panics if the length of `types` does not
     /// match the number of typevars in the generic context.
     ///
-    /// You are allowed to provide types that mention the typevars in this generic context.
-    pub(crate) fn specialize_recursive(
-        self,
-        db: &'db dyn Db,
-        mut types: Box<[Type<'db>]>,
-    ) -> Specialization<'db> {
+    /// If any provided type is `None`, we will use the corresponding typevar's default type. You
+    /// are allowed to provide types that mention the typevars in this generic context.
+    pub(crate) fn specialize_recursive<I>(self, db: &'db dyn Db, types: I) -> Specialization<'db>
+    where
+        I: IntoIterator<Item = Option<Type<'db>>>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let mut types = self.fill_in_defaults(db, types);
         let len = types.len();
-        assert!(self.len(db) == len);
         loop {
             let mut any_changed = false;
             for i in 0..len {
@@ -564,10 +532,7 @@ impl<'db> GenericContext<'db> {
         Specialization::new(db, self, Box::from([element_type]), None, Some(tuple))
     }
 
-    /// Creates a specialization of this generic context. Panics if the length of `types` does not
-    /// match the number of typevars in the generic context. If any provided type is `None`, we
-    /// will use the corresponding typevar's default type.
-    pub(crate) fn specialize_partial<I>(self, db: &'db dyn Db, types: I) -> Specialization<'db>
+    fn fill_in_defaults<I>(self, db: &'db dyn Db, types: I) -> Box<[Type<'db>]>
     where
         I: IntoIterator<Item = Option<Type<'db>>>,
         I::IntoIter: ExactSizeIterator,
@@ -610,7 +575,18 @@ impl<'db> GenericContext<'db> {
             expanded[idx] = default;
         }
 
-        Specialization::new(db, self, expanded.into_boxed_slice(), None, None)
+        expanded.into_boxed_slice()
+    }
+
+    /// Creates a specialization of this generic context. Panics if the length of `types` does not
+    /// match the number of typevars in the generic context. If any provided type is `None`, we
+    /// will use the corresponding typevar's default type.
+    pub(crate) fn specialize_partial<I>(self, db: &'db dyn Db, types: I) -> Specialization<'db>
+    where
+        I: IntoIterator<Item = Option<Type<'db>>>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        Specialization::new(db, self, self.fill_in_defaults(db, types), None, None)
     }
 
     pub(crate) fn normalized_impl(self, db: &'db dyn Db, visitor: &NormalizedVisitor<'db>) -> Self {
@@ -1045,11 +1021,6 @@ impl<'db> Specialization<'db> {
         Specialization::new(db, self.generic_context(db), types, None, None)
     }
 
-    #[must_use]
-    pub(crate) fn normalized(self, db: &'db dyn Db) -> Self {
-        self.normalized_impl(db, &NormalizedVisitor::default())
-    }
-
     pub(crate) fn normalized_impl(self, db: &'db dyn Db, visitor: &NormalizedVisitor<'db>) -> Self {
         let types: Box<[_]> = self
             .types(db)
@@ -1067,6 +1038,41 @@ impl<'db> Specialization<'db> {
             self.materialization_kind(db),
             tuple_inner,
         )
+    }
+
+    pub(super) fn recursive_type_normalized_impl(
+        self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Option<Self> {
+        let types = if nested {
+            self.types(db)
+                .iter()
+                .map(|ty| ty.recursive_type_normalized_impl(db, div, true, visitor))
+                .collect::<Option<Box<[_]>>>()?
+        } else {
+            self.types(db)
+                .iter()
+                .map(|ty| {
+                    ty.recursive_type_normalized_impl(db, div, true, visitor)
+                        .unwrap_or(div)
+                })
+                .collect::<Box<[_]>>()
+        };
+        let tuple_inner = match self.tuple_inner(db) {
+            Some(tuple) => Some(tuple.recursive_type_normalized_impl(db, div, nested, visitor)?),
+            None => None,
+        };
+        let context = self.generic_context(db);
+        Some(Self::new(
+            db,
+            context,
+            types,
+            self.materialization_kind(db),
+            tuple_inner,
+        ))
     }
 
     pub(super) fn materialize_impl(
@@ -1276,25 +1282,6 @@ impl<'db> Specialization<'db> {
         }
         // A tuple's specialization will include all of its element types, so we don't need to also
         // look in `self.tuple`.
-    }
-
-    /// Returns a copy of this specialization with the type at a given index replaced.
-    pub(crate) fn with_replaced_type(
-        self,
-        db: &'db dyn Db,
-        index: usize,
-        new_type: Type<'db>,
-    ) -> Self {
-        let mut new_types: Box<[_]> = self.types(db).to_vec().into_boxed_slice();
-        new_types[index] = new_type;
-
-        Self::new(
-            db,
-            self.generic_context(db),
-            new_types,
-            self.materialization_kind(db),
-            self.tuple_inner(db),
-        )
     }
 }
 
@@ -1570,9 +1557,16 @@ impl<'db> SpecializationBuilder<'db> {
                             argument: ty,
                         });
                     }
-                    _ => {
-                        self.add_type_mapping(bound_typevar, ty, polarity, f);
-                    }
+                    _ => self.add_type_mapping(bound_typevar, ty, polarity, f),
+                }
+            }
+
+            (Type::SubclassOf(subclass_of), ty) | (ty, Type::SubclassOf(subclass_of))
+                if subclass_of.is_type_var() =>
+            {
+                let formal_instance = Type::TypeVar(subclass_of.into_type_var().unwrap());
+                if let Some(actual_instance) = ty.to_instance(self.db) {
+                    return self.infer_map_impl(formal_instance, actual_instance, polarity, f);
                 }
             }
 

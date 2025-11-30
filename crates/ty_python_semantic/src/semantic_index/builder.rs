@@ -1064,6 +1064,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         ..
                     }) => (name, &None, default),
                 };
+                self.scopes_by_expression
+                    .record_expression(name, self.current_scope());
                 let symbol = self.add_symbol(name.id.clone());
                 // TODO create Definition for PEP 695 typevars
                 // note that the "bound" on the typevar is a totally different thing than whether
@@ -2255,6 +2257,8 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                 names,
             }) => {
                 for name in names {
+                    self.scopes_by_expression
+                        .record_expression(name, self.current_scope());
                     let symbol_id = self.add_symbol(name.id.clone());
                     let symbol = self.current_place_table().symbol(symbol_id);
                     // Check whether the variable has already been accessed in this scope.
@@ -2290,6 +2294,8 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                 names,
             }) => {
                 for name in names {
+                    self.scopes_by_expression
+                        .record_expression(name, self.current_scope());
                     let symbol_id = self.add_symbol(name.id.clone());
                     let symbol = self.current_place_table().symbol(symbol_id);
                     // Check whether the variable has already been accessed in this scope.

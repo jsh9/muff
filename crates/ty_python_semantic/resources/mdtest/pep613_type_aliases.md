@@ -96,6 +96,45 @@ def _(x: MyAlias):
     reveal_type(x)  # revealed: int | ((str, /) -> int)
 ```
 
+## Generic aliases
+
+A more comprehensive set of tests can be found in
+[`implicit_type_aliases.md`](./implicit_type_aliases.md). If the implementations ever diverge, we
+may need to duplicate more tests here.
+
+### Basic
+
+```py
+from typing import TypeAlias, TypeVar
+
+T = TypeVar("T")
+
+MyList: TypeAlias = list[T]
+ListOrSet: TypeAlias = list[T] | set[T]
+
+reveal_type(MyList)  # revealed: <class 'list[T]'>
+reveal_type(ListOrSet)  # revealed: types.UnionType
+
+def _(list_of_int: MyList[int], list_or_set_of_str: ListOrSet[str]):
+    reveal_type(list_of_int)  # revealed: list[int]
+    reveal_type(list_or_set_of_str)  # revealed: list[str] | set[str]
+```
+
+### Stringified generic alias
+
+```py
+from typing import TypeAlias, TypeVar
+
+T = TypeVar("T")
+U = TypeVar("U")
+
+TotallyStringifiedPEP613: TypeAlias = "dict[T, U]"
+TotallyStringifiedPartiallySpecialized: TypeAlias = "TotallyStringifiedPEP613[U, int]"
+
+def f(x: "TotallyStringifiedPartiallySpecialized[str]"):
+    reveal_type(x)  # revealed: @Todo(Generic stringified PEP-613 type alias)
+```
+
 ## Subscripted generic alias in union
 
 ```py
@@ -107,8 +146,7 @@ Alias1: TypeAlias = list[T] | set[T]
 MyAlias: TypeAlias = int | Alias1[str]
 
 def _(x: MyAlias):
-    # TODO: int | list[str] | set[str]
-    reveal_type(x)  # revealed: int | @Todo(Specialization of union type alias)
+    reveal_type(x)  # revealed: int | list[str] | set[str]
 ```
 
 ## Imported
@@ -144,17 +182,46 @@ def _(x: IntOrStr):
 ## Cyclic
 
 ```py
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar, Union
+from types import UnionType
 
 RecursiveTuple: TypeAlias = tuple[int | "RecursiveTuple", str]
 
 def _(rec: RecursiveTuple):
+    # TODO should be `tuple[int | RecursiveTuple, str]`
     reveal_type(rec)  # revealed: tuple[Divergent, str]
 
 RecursiveHomogeneousTuple: TypeAlias = tuple[int | "RecursiveHomogeneousTuple", ...]
 
 def _(rec: RecursiveHomogeneousTuple):
+    # TODO should be `tuple[int | RecursiveHomogeneousTuple, ...]`
     reveal_type(rec)  # revealed: tuple[Divergent, ...]
+
+ClassInfo: TypeAlias = type | UnionType | tuple["ClassInfo", ...]
+reveal_type(ClassInfo)  # revealed: types.UnionType
+
+def my_isinstance(obj: object, classinfo: ClassInfo) -> bool:
+    # TODO should be `type | UnionType | tuple[ClassInfo, ...]`
+    reveal_type(classinfo)  # revealed: type | UnionType | tuple[Divergent, ...]
+    return isinstance(obj, classinfo)
+
+K = TypeVar("K")
+V = TypeVar("V")
+NestedDict: TypeAlias = dict[K, Union[V, "NestedDict[K, V]"]]
+
+def _(nested: NestedDict[str, int]):
+    # TODO should be `dict[str, int | NestedDict[str, int]]`
+    reveal_type(nested)  # revealed: dict[@Todo(specialized recursive generic type alias), Divergent]
+
+my_isinstance(1, int)
+my_isinstance(1, int | str)
+my_isinstance(1, (int, str))
+my_isinstance(1, (int, (str, float)))
+my_isinstance(1, (int, (str | float)))
+# error: [invalid-argument-type]
+my_isinstance(1, 1)
+# TODO should be an invalid-argument-type error
+my_isinstance(1, (int, (str, 1)))
 ```
 
 ## Conditionally imported on Python < 3.10

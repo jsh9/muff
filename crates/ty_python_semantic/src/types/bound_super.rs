@@ -172,7 +172,7 @@ impl<'db> BoundSuperError<'db> {
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, get_size2::GetSize)]
 pub enum SuperOwnerKind<'db> {
-    Dynamic(DynamicType<'db>),
+    Dynamic(DynamicType),
     Class(ClassType<'db>),
     Instance(NominalInstanceType<'db>),
 }
@@ -189,6 +189,26 @@ impl<'db> SuperOwnerKind<'db> {
                 .as_nominal_instance()
                 .map(Self::Instance)
                 .unwrap_or(Self::Dynamic(DynamicType::Any)),
+        }
+    }
+
+    fn recursive_type_normalized_impl(
+        self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Option<Self> {
+        match self {
+            SuperOwnerKind::Dynamic(dynamic) => {
+                Some(SuperOwnerKind::Dynamic(dynamic.recursive_type_normalized()))
+            }
+            SuperOwnerKind::Class(class) => Some(SuperOwnerKind::Class(
+                class.recursive_type_normalized_impl(db, div, nested, visitor)?,
+            )),
+            SuperOwnerKind::Instance(instance) => Some(SuperOwnerKind::Instance(
+                instance.recursive_type_normalized_impl(db, div, nested, visitor)?,
+            )),
         }
     }
 
@@ -290,10 +310,15 @@ impl<'db> BoundSuperType<'db> {
             Type::Never => SuperOwnerKind::Dynamic(DynamicType::Unknown),
             Type::Dynamic(dynamic) => SuperOwnerKind::Dynamic(dynamic),
             Type::ClassLiteral(class) => SuperOwnerKind::Class(ClassType::NonGeneric(class)),
-            Type::SubclassOf(subclass_of_type) => match subclass_of_type.subclass_of() {
-                SubclassOfInner::Class(class) => SuperOwnerKind::Class(class),
-                SubclassOfInner::Dynamic(dynamic) => SuperOwnerKind::Dynamic(dynamic),
-            },
+            Type::SubclassOf(subclass_of_type) => {
+                match subclass_of_type.subclass_of().with_transposed_type_var(db) {
+                    SubclassOfInner::Class(class) => SuperOwnerKind::Class(class),
+                    SubclassOfInner::Dynamic(dynamic) => SuperOwnerKind::Dynamic(dynamic),
+                    SubclassOfInner::TypeVar(bound_typevar) => {
+                        return delegate_to(Type::TypeVar(bound_typevar));
+                    }
+                }
+            }
             Type::NominalInstance(instance) => SuperOwnerKind::Instance(instance),
 
             Type::ProtocolInstance(protocol) => {
@@ -430,8 +455,15 @@ impl<'db> BoundSuperType<'db> {
         let pivot_class = match pivot_class_type {
             Type::ClassLiteral(class) => ClassBase::Class(ClassType::NonGeneric(class)),
             Type::SubclassOf(subclass_of) => match subclass_of.subclass_of() {
-                SubclassOfInner::Class(class) => ClassBase::Class(class),
                 SubclassOfInner::Dynamic(dynamic) => ClassBase::Dynamic(dynamic),
+                _ => match subclass_of.subclass_of().into_class(db) {
+                    Some(class) => ClassBase::Class(class),
+                    None => {
+                        return Err(BoundSuperError::InvalidPivotClassType {
+                            pivot_class: pivot_class_type,
+                        });
+                    }
+                },
             },
             Type::SpecialForm(SpecialFormType::Protocol) => ClassBase::Protocol,
             Type::SpecialForm(SpecialFormType::Generic) => ClassBase::Generic,
@@ -581,5 +613,21 @@ impl<'db> BoundSuperType<'db> {
             self.pivot_class(db).normalized_impl(db, visitor),
             self.owner(db).normalized_impl(db, visitor),
         )
+    }
+
+    pub(super) fn recursive_type_normalized_impl(
+        self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+        visitor: &NormalizedVisitor<'db>,
+    ) -> Option<Self> {
+        Some(Self::new(
+            db,
+            self.pivot_class(db)
+                .recursive_type_normalized_impl(db, div, nested, visitor)?,
+            self.owner(db)
+                .recursive_type_normalized_impl(db, div, nested, visitor)?,
+        ))
     }
 }

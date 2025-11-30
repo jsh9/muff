@@ -3,15 +3,16 @@ use crate::references::{ReferencesMode, references};
 use crate::{Db, ReferenceTarget};
 use ruff_db::files::File;
 use ruff_text_size::{Ranged, TextSize};
-use ty_python_semantic::ImportAliasResolution;
+use ty_python_semantic::{ImportAliasResolution, SemanticModel};
 
 /// Returns the range of the symbol if it can be renamed, None if not.
 pub fn can_rename(db: &dyn Db, file: File, offset: TextSize) -> Option<ruff_text_size::TextRange> {
     let parsed = ruff_db::parsed::parsed_module(db, file);
     let module = parsed.load(db);
+    let model = SemanticModel::new(db, file);
 
     // Get the definitions for the symbol at the offset
-    let goto_target = find_goto_target(&module, offset)?;
+    let goto_target = find_goto_target(&model, &module, offset)?;
 
     // Don't allow renaming of import module components
     if matches!(
@@ -24,7 +25,7 @@ pub fn can_rename(db: &dyn Db, file: File, offset: TextSize) -> Option<ruff_text
     let current_file_in_project = is_file_in_project(db, file);
 
     if let Some(definition_targets) = goto_target
-        .get_definition_targets(file, db, ImportAliasResolution::PreserveAliases)
+        .get_definition_targets(&model, ImportAliasResolution::PreserveAliases)
         .and_then(|definitions| definitions.declaration_targets(db))
     {
         for target in &definition_targets {
@@ -58,9 +59,10 @@ pub fn rename(
 ) -> Option<Vec<ReferenceTarget>> {
     let parsed = ruff_db::parsed::parsed_module(db, file);
     let module = parsed.load(db);
+    let model = SemanticModel::new(db, file);
 
     // Get the definitions for the symbol at the offset
-    let goto_target = find_goto_target(&module, offset)?;
+    let goto_target = find_goto_target(&model, &module, offset)?;
 
     // Clients shouldn't call us with an empty new name, but just in case...
     if new_name.is_empty() {
@@ -333,6 +335,546 @@ class DataProcessor:
         4 | def test(data):
         5 |     return func(data)
           |            ----
+          |
+        ");
+    }
+
+    #[test]
+    fn rename_string_annotation1() {
+        let test = cursor_test(
+            r#"
+        a: "MyCla<CURSOR>ss" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:2:5
+          |
+        2 | a: "MyClass" = 1
+          |     ^^^^^^^
+        3 |
+        4 | class MyClass:
+          |       -------
+        5 |     """some docs"""
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_string_annotation2() {
+        let test = cursor_test(
+            r#"
+        a: "None | MyCl<CURSOR>ass" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:2:12
+          |
+        2 | a: "None | MyClass" = 1
+          |            ^^^^^^^
+        3 |
+        4 | class MyClass:
+          |       -------
+        5 |     """some docs"""
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_string_annotation3() {
+        let test = cursor_test(
+            r#"
+        a: "None |<CURSOR> MyClass" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @"Cannot rename");
+    }
+
+    #[test]
+    fn rename_string_annotation4() {
+        let test = cursor_test(
+            r#"
+        a: "None | MyClass<CURSOR>" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:2:12
+          |
+        2 | a: "None | MyClass" = 1
+          |            ^^^^^^^
+        3 |
+        4 | class MyClass:
+          |       -------
+        5 |     """some docs"""
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_string_annotation5() {
+        let test = cursor_test(
+            r#"
+        a: "None | MyClass"<CURSOR> = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @"Cannot rename");
+    }
+
+    #[test]
+    fn rename_string_annotation_dangling1() {
+        let test = cursor_test(
+            r#"
+        a: "MyCl<CURSOR>ass |" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @"Cannot rename");
+    }
+
+    #[test]
+    fn rename_string_annotation_dangling2() {
+        let test = cursor_test(
+            r#"
+        a: "MyCl<CURSOR>ass | No" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:2:5
+          |
+        2 | a: "MyClass | No" = 1
+          |     ^^^^^^^
+        3 |
+        4 | class MyClass:
+          |       -------
+        5 |     """some docs"""
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_string_annotation_dangling3() {
+        let test = cursor_test(
+            r#"
+        a: "MyClass | N<CURSOR>o" = 1
+
+        class MyClass:
+            """some docs"""
+        "#,
+        );
+
+        assert_snapshot!(test.rename("MyNewClass"), @"Cannot rename");
+    }
+
+    #[test]
+    fn rename_match_name_stmt() {
+        let test = cursor_test(
+            r#"
+            def my_func(command: str):
+                match command.split():
+                    case ["get", a<CURSOR>b]:
+                        x = ab
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:4:22
+          |
+        2 | def my_func(command: str):
+        3 |     match command.split():
+        4 |         case ["get", ab]:
+          |                      ^^
+        5 |             x = ab
+          |                 --
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_name_binding() {
+        let test = cursor_test(
+            r#"
+            def my_func(command: str):
+                match command.split():
+                    case ["get", ab]:
+                        x = a<CURSOR>b
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:4:22
+          |
+        2 | def my_func(command: str):
+        3 |     match command.split():
+        4 |         case ["get", ab]:
+          |                      ^^
+        5 |             x = ab
+          |                 --
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_rest_stmt() {
+        let test = cursor_test(
+            r#"
+            def my_func(command: str):
+                match command.split():
+                    case ["get", *a<CURSOR>b]:
+                        x = ab
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:4:23
+          |
+        2 | def my_func(command: str):
+        3 |     match command.split():
+        4 |         case ["get", *ab]:
+          |                       ^^
+        5 |             x = ab
+          |                 --
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_rest_binding() {
+        let test = cursor_test(
+            r#"
+            def my_func(command: str):
+                match command.split():
+                    case ["get", *ab]:
+                        x = a<CURSOR>b
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:4:23
+          |
+        2 | def my_func(command: str):
+        3 |     match command.split():
+        4 |         case ["get", *ab]:
+          |                       ^^
+        5 |             x = ab
+          |                 --
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_as_stmt() {
+        let test = cursor_test(
+            r#"
+            def my_func(command: str):
+                match command.split():
+                    case ["get", ("a" | "b") as a<CURSOR>b]:
+                        x = ab
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:4:37
+          |
+        2 | def my_func(command: str):
+        3 |     match command.split():
+        4 |         case ["get", ("a" | "b") as ab]:
+          |                                     ^^
+        5 |             x = ab
+          |                 --
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_as_binding() {
+        let test = cursor_test(
+            r#"
+            def my_func(command: str):
+                match command.split():
+                    case ["get", ("a" | "b") as ab]:
+                        x = a<CURSOR>b
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.py:4:37
+          |
+        2 | def my_func(command: str):
+        3 |     match command.split():
+        4 |         case ["get", ("a" | "b") as ab]:
+          |                                     ^^
+        5 |             x = ab
+          |                 --
+          |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_keyword_stmt() {
+        let test = cursor_test(
+            r#"
+            class Click:
+                __match_args__ = ("position", "button")
+                def __init__(self, pos, btn):
+                    self.position: int = pos
+                    self.button: str = btn
+            
+            def my_func(event: Click):
+                match event:
+                    case Click(x, button=a<CURSOR>b):
+                        x = ab
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 2 locations)
+          --> main.py:10:30
+           |
+         8 | def my_func(event: Click):
+         9 |     match event:
+        10 |         case Click(x, button=ab):
+           |                              ^^
+        11 |             x = ab
+           |                 --
+           |
+        ");
+    }
+
+    #[test]
+    fn rename_match_keyword_binding() {
+        let test = cursor_test(
+            r#"
+            class Click:
+                __match_args__ = ("position", "button")
+                def __init__(self, pos, btn):
+                    self.position: int = pos
+                    self.button: str = btn
+            
+            def my_func(event: Click):
+                match event:
+                    case Click(x, button=ab):
+                        x = a<CURSOR>b
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 2 locations)
+          --> main.py:10:30
+           |
+         8 | def my_func(event: Click):
+         9 |     match event:
+        10 |         case Click(x, button=ab):
+           |                              ^^
+        11 |             x = ab
+           |                 --
+           |
+        ");
+    }
+
+    #[test]
+    fn rename_match_class_name() {
+        let test = cursor_test(
+            r#"
+            class Click:
+                __match_args__ = ("position", "button")
+                def __init__(self, pos, btn):
+                    self.position: int = pos
+                    self.button: str = btn
+            
+            def my_func(event: Click):
+                match event:
+                    case Cl<CURSOR>ick(x, button=ab):
+                        x = ab
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r#"
+        info[rename]: Rename symbol (found 3 locations)
+          --> main.py:2:7
+           |
+         2 | class Click:
+           |       ^^^^^
+         3 |     __match_args__ = ("position", "button")
+         4 |     def __init__(self, pos, btn):
+           |
+          ::: main.py:8:20
+           |
+         6 |         self.button: str = btn
+         7 |
+         8 | def my_func(event: Click):
+           |                    -----
+         9 |     match event:
+        10 |         case Click(x, button=ab):
+           |              -----
+        11 |             x = ab
+           |
+        "#);
+    }
+
+    #[test]
+    fn rename_match_class_field_name() {
+        let test = cursor_test(
+            r#"
+            class Click:
+                __match_args__ = ("position", "button")
+                def __init__(self, pos, btn):
+                    self.position: int = pos
+                    self.button: str = btn
+            
+            def my_func(event: Click):
+                match event:
+                    case Click(x, but<CURSOR>ton=ab):
+                        x = ab
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @"Cannot rename");
+    }
+
+    #[test]
+    fn rename_typevar_name_stmt() {
+        let test = cursor_test(
+            r#"
+            type Alias1[A<CURSOR>B: int = bool] = tuple[AB, list[AB]]
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.py:2:13
+          |
+        2 | type Alias1[AB: int = bool] = tuple[AB, list[AB]]
+          |             ^^                      --       --
+          |
+        ");
+    }
+
+    #[test]
+    fn rename_typevar_name_binding() {
+        let test = cursor_test(
+            r#"
+            type Alias1[AB: int = bool] = tuple[A<CURSOR>B, list[AB]]
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.py:2:13
+          |
+        2 | type Alias1[AB: int = bool] = tuple[AB, list[AB]]
+          |             ^^                      --       --
+          |
+        ");
+    }
+
+    #[test]
+    fn rename_typevar_spec_stmt() {
+        let test = cursor_test(
+            r#"
+            from typing import Callable
+            type Alias2[**A<CURSOR>B = [int, str]] = Callable[AB, tuple[AB]]
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.py:3:15
+          |
+        2 | from typing import Callable
+        3 | type Alias2[**AB = [int, str]] = Callable[AB, tuple[AB]]
+          |               ^^                          --        --
+          |
+        ");
+    }
+
+    #[test]
+    fn rename_typevar_spec_binding() {
+        let test = cursor_test(
+            r#"
+            from typing import Callable
+            type Alias2[**AB = [int, str]] = Callable[A<CURSOR>B, tuple[AB]]
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.py:3:15
+          |
+        2 | from typing import Callable
+        3 | type Alias2[**AB = [int, str]] = Callable[AB, tuple[AB]]
+          |               ^^                          --        --
+          |
+        ");
+    }
+
+    #[test]
+    fn rename_typevar_tuple_stmt() {
+        let test = cursor_test(
+            r#"
+            type Alias3[*A<CURSOR>B = ()] = tuple[tuple[*AB], tuple[*AB]]
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.py:2:14
+          |
+        2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
+          |              ^^                      --          --
+          |
+        ");
+    }
+
+    #[test]
+    fn rename_typevar_tuple_binding() {
+        let test = cursor_test(
+            r#"
+            type Alias3[*AB = ()] = tuple[tuple[*A<CURSOR>B], tuple[*AB]]
+            "#,
+        );
+
+        assert_snapshot!(test.rename("XY"), @r"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.py:2:14
+          |
+        2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
+          |              ^^                      --          --
           |
         ");
     }

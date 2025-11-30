@@ -4,19 +4,20 @@ use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
 use ruff_diagnostics::Edit;
-use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_python_codegen::Stylist;
 use ruff_python_parser::{Token, TokenAt, TokenKind, Tokens};
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
+use ty_python_semantic::types::UnionType;
 use ty_python_semantic::{
-    Completion as SemanticCompletion, ModuleName, NameKind, SemanticModel,
-    types::{CycleDetector, Type},
+    Completion as SemanticCompletion, KnownModule, ModuleName, NameKind, SemanticModel,
+    types::{CycleDetector, KnownClass, Type},
 };
 
 use crate::docstring::Docstring;
 use crate::find_node::covering_node;
-use crate::goto::DefinitionsOrTargets;
+use crate::goto::Definitions;
 use crate::importer::{ImportRequest, Importer};
 use crate::symbols::QueryPattern;
 use crate::{Db, all_symbols};
@@ -36,10 +37,19 @@ impl<'db> Completions<'db> {
     /// the user has typed as part of the next symbol they are writing.
     /// This collection will treat it as a query when present, and only
     /// add completions that match it.
-    fn new(db: &'db dyn Db, typed: Option<&str>) -> Completions<'db> {
+    fn fuzzy(db: &'db dyn Db, typed: Option<&str>) -> Completions<'db> {
         let query = typed
-            .map(QueryPattern::new)
+            .map(QueryPattern::fuzzy)
             .unwrap_or_else(QueryPattern::matches_all_symbols);
+        Completions {
+            db,
+            items: vec![],
+            query,
+        }
+    }
+
+    fn exactly(db: &'db dyn Db, symbol: &str) -> Completions<'db> {
+        let query = QueryPattern::exactly(symbol);
         Completions {
             db,
             items: vec![],
@@ -54,6 +64,21 @@ impl<'db> Completions<'db> {
         self.items
             .dedup_by(|c1, c2| (&c1.name, c1.module_name) == (&c2.name, c2.module_name));
         self.items
+    }
+
+    fn into_imports(mut self) -> Vec<ImportEdit> {
+        self.items.sort_by(compare_suggestions);
+        self.items
+            .dedup_by(|c1, c2| (&c1.name, c1.module_name) == (&c2.name, c2.module_name));
+        self.items
+            .into_iter()
+            .filter_map(|item| {
+                Some(ImportEdit {
+                    label: format!("import {}.{}", item.module_name?, item.name),
+                    edit: item.import?,
+                })
+            })
+            .collect()
     }
 
     /// Attempts to adds the given completion to this collection.
@@ -81,6 +106,31 @@ impl<'db> Completions<'db> {
     /// Always adds the given completion to this collection.
     fn force_add(&mut self, completion: Completion<'db>) {
         self.items.push(completion);
+    }
+
+    /// Tags completions with whether they are known to be usable in
+    /// a `raise` context.
+    ///
+    /// It's possible that some completions are usable in a `raise`
+    /// but aren't marked by this method. That is, false negatives are
+    /// possible but false positives are not.
+    fn tag_raisable(&mut self) {
+        let raisable_type = UnionType::from_elements(
+            self.db,
+            [
+                KnownClass::BaseException.to_subclass_of(self.db),
+                KnownClass::BaseException.to_instance(self.db),
+            ],
+        );
+        for item in &mut self.items {
+            let Some(ty) = item.ty else { continue };
+            item.is_definitively_raisable = ty.is_assignable_to(self.db, raisable_type);
+        }
+    }
+
+    /// Removes any completion that doesn't satisfy the given predicate.
+    fn retain(&mut self, predicate: impl FnMut(&Completion<'_>) -> bool) {
+        self.items.retain(predicate);
     }
 }
 
@@ -153,6 +203,13 @@ pub struct Completion<'db> {
     /// Whether this item only exists for type checking purposes and
     /// will be missing at runtime
     pub is_type_check_only: bool,
+    /// Whether this item can definitively be used in a `raise` context.
+    ///
+    /// Note that this may not always be computed. (i.e., Only computed
+    /// when we are in a `raise` context.) And also note that if this
+    /// is `true`, then it's definitively usable in `raise`, but if
+    /// it's `false`, it _may_ still be usable in `raise`.
+    pub is_definitively_raisable: bool,
     /// The documentation associated with this item, if
     /// available.
     pub documentation: Option<Docstring>,
@@ -163,9 +220,7 @@ impl<'db> Completion<'db> {
         db: &'db dyn Db,
         semantic: SemanticCompletion<'db>,
     ) -> Completion<'db> {
-        let definition = semantic
-            .ty
-            .and_then(|ty| DefinitionsOrTargets::from_ty(db, ty));
+        let definition = semantic.ty.and_then(|ty| Definitions::from_ty(db, ty));
         let documentation = definition.and_then(|def| def.docstring(db));
         let is_type_check_only = semantic.is_type_check_only(db);
         Completion {
@@ -177,6 +232,7 @@ impl<'db> Completion<'db> {
             import: None,
             builtin: semantic.builtin,
             is_type_check_only,
+            is_definitively_raisable: false,
             documentation,
         }
     }
@@ -257,6 +313,7 @@ impl<'db> Completion<'db> {
             import: None,
             builtin: false,
             is_type_check_only: false,
+            is_definitively_raisable: false,
             documentation: None,
         }
     }
@@ -271,6 +328,7 @@ impl<'db> Completion<'db> {
             import: None,
             builtin: true,
             is_type_check_only: false,
+            is_definitively_raisable: false,
             documentation: None,
         }
     }
@@ -333,7 +391,7 @@ pub fn completion<'db>(
         return vec![];
     }
 
-    let mut completions = Completions::new(db, typed.as_deref());
+    let mut completions = Completions::fuzzy(db, typed.as_deref());
 
     if let Some(import) = ImportStatement::detect(db, file, &parsed, tokens, typed.as_deref()) {
         import.add_completions(db, file, &mut completions);
@@ -364,7 +422,40 @@ pub fn completion<'db>(
         }
     }
 
+    if is_raising_exception(tokens) {
+        completions.tag_raisable();
+
+        // As a special case, and because it's a common footgun, we
+        // specifically disallow `NotImplemented` in this context.
+        // `NotImplementedError` should be used instead. So if we can
+        // definitively detect `NotImplemented`, then we can safely
+        // omit it from suggestions.
+        completions.retain(|item| {
+            let Some(ty) = item.ty else { return true };
+            !ty.is_notimplemented(db)
+        });
+    }
+
     completions.into_completions()
+}
+
+pub(crate) struct ImportEdit {
+    pub label: String,
+    pub edit: Edit,
+}
+
+pub(crate) fn missing_imports(
+    db: &dyn Db,
+    file: File,
+    parsed: &ParsedModuleRef,
+    symbol: &str,
+    node: AnyNodeRef,
+) -> Vec<ImportEdit> {
+    let mut completions = Completions::exactly(db, symbol);
+    let scoped = ScopedTarget { node };
+    add_unimported_completions(db, file, parsed, scoped, &mut completions);
+
+    completions.into_imports()
 }
 
 /// Adds completions derived from keywords.
@@ -427,7 +518,8 @@ fn add_unimported_completions<'db>(
     let members = importer.members_in_scope_at(scoped.node, scoped.node.start());
 
     for symbol in all_symbols(db, &completions.query) {
-        if symbol.module.file(db) == Some(file) {
+        if symbol.module.file(db) == Some(file) || symbol.module.is_known(db, KnownModule::Builtins)
+        {
             continue;
         }
 
@@ -450,6 +542,7 @@ fn add_unimported_completions<'db>(
             builtin: false,
             // TODO: `is_type_check_only` requires inferring the type of the symbol
             is_type_check_only: false,
+            is_definitively_raisable: false,
             documentation: None,
         });
     }
@@ -1263,7 +1356,8 @@ fn find_typed_text(
     if last.end() < offset || last.range().is_empty() {
         return None;
     }
-    Some(source[last.range()].to_string())
+    let range = TextRange::new(last.start(), offset);
+    Some(source[range].to_string())
 }
 
 /// Whether the last token is in a place where we should not provide completions.
@@ -1341,7 +1435,7 @@ fn is_in_definition_place(
 /// E.g. naming a parameter, type parameter, or `for` <name>).
 fn is_in_variable_binding(parsed: &ParsedModuleRef, offset: TextSize, typed: Option<&str>) -> bool {
     let range = if let Some(typed) = typed {
-        let start = offset - typed.text_len();
+        let start = offset.saturating_sub(typed.text_len());
         TextRange::new(start, offset)
     } else {
         TextRange::empty(offset)
@@ -1354,8 +1448,50 @@ fn is_in_variable_binding(parsed: &ParsedModuleRef, offset: TextSize, typed: Opt
             type_param.name.range.contains_range(range)
         }
         ast::AnyNodeRef::StmtFor(stmt_for) => stmt_for.target.range().contains_range(range),
+        // The AST does not produce `ast::AnyNodeRef::Parameter` nodes for keywords
+        // or otherwise invalid syntax. Rather they are captured in a
+        // `ast::AnyNodeRef::Parameters` node as "empty space". To ensure
+        // we still suppress suggestions even when the syntax is technically
+        // invalid we extract the token under the cursor and check if it makes
+        // up that "empty space" inside the Parameters Node. If it does, we know
+        // that we are still binding variables, just that the current state is
+        // syntatically invalid. Hence we suppress autocomplete suggestons
+        // also in those cases.
+        ast::AnyNodeRef::Parameters(params) => {
+            if !params.range.contains_range(range) {
+                return false;
+            }
+            params
+                .iter()
+                .map(|param| param.range())
+                .all(|r| !r.contains_range(range))
+        }
         _ => false,
     })
+}
+
+/// Returns true when the cursor is after a `raise` keyword.
+fn is_raising_exception(tokens: &[Token]) -> bool {
+    /// The maximum number of tokens we're willing to
+    /// look-behind to find a `raise` keyword.
+    const LIMIT: usize = 10;
+
+    // This only looks for things like `raise foo.bar.baz.qu<CURSOR>`.
+    // Technically, any kind of expression is allowed after `raise`.
+    // But we may not always want to treat it specially. So we're
+    // rather conservative about what we consider "raising an
+    // exception" to be for the purposes of completions. The failure
+    // mode here is that we may wind up suggesting things that
+    // shouldn't be raised. The benefit is that when this heuristic
+    // does work, we won't suggest things that shouldn't be raised.
+    for token in tokens.iter().rev().take(LIMIT) {
+        match token.kind() {
+            TokenKind::Name | TokenKind::Dot => continue,
+            TokenKind::Raise => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Order completions according to the following rules:
@@ -1370,8 +1506,16 @@ fn is_in_variable_binding(parsed: &ParsedModuleRef, offset: TextSize, typed: Opt
 /// This has the effect of putting all dunder attributes after "normal"
 /// attributes, and all single-underscore attributes after dunder attributes.
 fn compare_suggestions(c1: &Completion, c2: &Completion) -> Ordering {
-    fn key<'a>(completion: &'a Completion) -> (bool, bool, bool, NameKind, bool, &'a Name) {
+    fn key<'a>(completion: &'a Completion) -> (bool, bool, bool, bool, NameKind, bool, &'a Name) {
         (
+            // This is only true when we are both in a `raise` context
+            // *and* we know this suggestion is definitively usable
+            // in a `raise` context. So we should sort these before
+            // anything else.
+            !completion.is_definitively_raisable,
+            // When `None`, a completion is for something in the
+            // current module, which we should generally prefer over
+            // something from outside the module.
             completion.module_name.is_some(),
             // At time of writing (2025-11-11), keyword completions
             // are classified as builtins, which makes them sort after
@@ -1546,6 +1690,21 @@ mod tests {
         with
         yield
         ",
+        );
+    }
+
+    #[test]
+    fn inside_token() {
+        let test = completion_test_builder(
+            "\
+foo_bar_baz = 1
+x = foo<CURSOR>bad
+",
+        );
+
+        assert_snapshot!(
+            test.skip_builtins().build().snapshot(),
+            @"foo_bar_baz",
         );
     }
 
@@ -2737,7 +2896,7 @@ Answer.<CURSOR>
                 __itemsize__ :: int
                 __iter__ :: bound method <class 'Answer'>.__iter__[_EnumMemberT]() -> Iterator[_EnumMemberT@__iter__]
                 __len__ :: bound method <class 'Answer'>.__len__() -> int
-                __members__ :: MappingProxyType[str, Unknown]
+                __members__ :: MappingProxyType[str, Answer]
                 __module__ :: str
                 __mro__ :: tuple[type, ...]
                 __name__ :: str
@@ -5255,6 +5414,45 @@ for foo, bar<CURSOR>
         let builder = completion_test_builder(
             "\
 def foo(p<CURSOR>
+",
+        );
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn no_completions_in_function_param_keyword() {
+        let builder = completion_test_builder(
+            "\
+def foo(in<CURSOR>
+",
+        );
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn no_completions_in_function_param_multi_keyword() {
+        let builder = completion_test_builder(
+            "\
+def foo(param, in<CURSOR>
+",
+        );
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn no_completions_in_function_param_multi_keyword_middle() {
+        let builder = completion_test_builder(
+            "\
+def foo(param, in<CURSOR>, param_two
 ",
         );
         assert_snapshot!(
