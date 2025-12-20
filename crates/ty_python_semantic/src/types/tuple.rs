@@ -23,13 +23,14 @@ use itertools::{Either, EitherOrBoth, Itertools};
 
 use crate::semantic_index::definition::Definition;
 use crate::subscript::{Nth, OutOfBoundsError, PyIndex, PySlice, StepSizeZeroError};
+use crate::types::builder::RecursivelyDefined;
 use crate::types::class::{ClassType, KnownClass};
 use crate::types::constraints::{ConstraintSet, IteratorConstraintsExtension};
 use crate::types::generics::InferableTypeVars;
 use crate::types::{
     ApplyTypeMappingVisitor, BoundTypeVarInstance, FindLegacyTypeVarsVisitor, HasRelationToVisitor,
-    IsDisjointVisitor, IsEquivalentVisitor, NormalizedVisitor, Type, TypeMapping, TypeRelation,
-    UnionBuilder, UnionType,
+    IntersectionType, IsDisjointVisitor, IsEquivalentVisitor, NormalizedVisitor, Type, TypeMapping,
+    TypeRelation, UnionBuilder, UnionType,
 };
 use crate::types::{Truthiness, TypeContext};
 use crate::{Db, FxOrderSet, Program};
@@ -234,12 +235,11 @@ impl<'db> TupleType<'db> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         Some(Self::new_internal(
             db,
             self.tuple(db)
-                .recursive_type_normalized_impl(db, div, nested, visitor)?,
+                .recursive_type_normalized_impl(db, div, nested)?,
         ))
     }
 
@@ -285,6 +285,23 @@ impl<'db> TupleType<'db> {
             relation,
             relation_visitor,
             disjointness_visitor,
+        )
+    }
+
+    pub(crate) fn is_disjoint_from_impl(
+        self,
+        db: &'db dyn Db,
+        other: Self,
+        inferable: InferableTypeVars<'_, 'db>,
+        disjointness_visitor: &IsDisjointVisitor<'db>,
+        relation_visitor: &HasRelationToVisitor<'db>,
+    ) -> ConstraintSet<'db> {
+        self.tuple(db).is_disjoint_from_impl(
+            db,
+            other.tuple(db),
+            inferable,
+            disjointness_visitor,
+            relation_visitor,
         )
     }
 
@@ -349,6 +366,10 @@ impl<T> FixedLengthTuple<T> {
         &self.0
     }
 
+    pub(crate) fn owned_elements(self) -> Box<[T]> {
+        self.0
+    }
+
     pub(crate) fn elements(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator + '_ {
         self.0.iter()
     }
@@ -411,13 +432,12 @@ impl<'db> FixedLengthTuple<Type<'db>> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         if nested {
             Some(Self::from_elements(
                 self.0
                     .iter()
-                    .map(|ty| ty.recursive_type_normalized_impl(db, div, true, visitor))
+                    .map(|ty| ty.recursive_type_normalized_impl(db, div, true))
                     .collect::<Option<Box<[_]>>>()?,
             ))
         } else {
@@ -425,7 +445,7 @@ impl<'db> FixedLengthTuple<Type<'db>> {
                 self.0
                     .iter()
                     .map(|ty| {
-                        ty.recursive_type_normalized_impl(db, div, true, visitor)
+                        ty.recursive_type_normalized_impl(db, div, true)
                             .unwrap_or(div)
                     })
                     .collect::<Box<[_]>>(),
@@ -804,18 +824,17 @@ impl<'db> VariableLengthTuple<Type<'db>> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         let prefix = if nested {
             self.prefix
                 .iter()
-                .map(|ty| ty.recursive_type_normalized_impl(db, div, true, visitor))
+                .map(|ty| ty.recursive_type_normalized_impl(db, div, true))
                 .collect::<Option<Box<_>>>()?
         } else {
             self.prefix
                 .iter()
                 .map(|ty| {
-                    ty.recursive_type_normalized_impl(db, div, true, visitor)
+                    ty.recursive_type_normalized_impl(db, div, true)
                         .unwrap_or(div)
                 })
                 .collect::<Box<_>>()
@@ -823,23 +842,23 @@ impl<'db> VariableLengthTuple<Type<'db>> {
         let suffix = if nested {
             self.suffix
                 .iter()
-                .map(|ty| ty.recursive_type_normalized_impl(db, div, true, visitor))
+                .map(|ty| ty.recursive_type_normalized_impl(db, div, true))
                 .collect::<Option<Box<_>>>()?
         } else {
             self.suffix
                 .iter()
                 .map(|ty| {
-                    ty.recursive_type_normalized_impl(db, div, true, visitor)
+                    ty.recursive_type_normalized_impl(db, div, true)
                         .unwrap_or(div)
                 })
                 .collect::<Box<_>>()
         };
         let variable = if nested {
             self.variable
-                .recursive_type_normalized_impl(db, div, true, visitor)?
+                .recursive_type_normalized_impl(db, div, true)?
         } else {
             self.variable
-                .recursive_type_normalized_impl(db, div, true, visitor)
+                .recursive_type_normalized_impl(db, div, true)
                 .unwrap_or(div)
         };
         Some(Self {
@@ -996,10 +1015,22 @@ impl<'db> VariableLengthTuple<Type<'db>> {
                             relation_visitor,
                             disjointness_visitor,
                         ),
-                        EitherOrBoth::Right(_) => {
+                        EitherOrBoth::Right(other_ty) => {
                             // The rhs has a required element that the lhs is not guaranteed to
-                            // provide.
-                            return ConstraintSet::from(false);
+                            // provide, unless the lhs has a dynamic variable-length portion
+                            // that can materialize to provide it (for assignability only),
+                            // as in `tuple[Any, ...]` matching `tuple[int, int]`.
+                            if !relation.is_assignability() || !self.variable.is_dynamic() {
+                                return ConstraintSet::from(false);
+                            }
+                            self.variable.has_relation_to_impl(
+                                db,
+                                other_ty,
+                                inferable,
+                                relation,
+                                relation_visitor,
+                                disjointness_visitor,
+                            )
                         }
                     };
                     if result
@@ -1035,10 +1066,22 @@ impl<'db> VariableLengthTuple<Type<'db>> {
                             relation_visitor,
                             disjointness_visitor,
                         ),
-                        EitherOrBoth::Right(_) => {
+                        EitherOrBoth::Right(other_ty) => {
                             // The rhs has a required element that the lhs is not guaranteed to
-                            // provide.
-                            return ConstraintSet::from(false);
+                            // provide, unless the lhs has a dynamic variable-length portion
+                            // that can materialize to provide it (for assignability only),
+                            // as in `tuple[Any, ...]` matching `tuple[int, int]`.
+                            if !relation.is_assignability() || !self.variable.is_dynamic() {
+                                return ConstraintSet::from(false);
+                            }
+                            self.variable.has_relation_to_impl(
+                                db,
+                                *other_ty,
+                                inferable,
+                                relation,
+                                relation_visitor,
+                                disjointness_visitor,
+                            )
                         }
                     };
                     if result
@@ -1250,14 +1293,13 @@ impl<'db> Tuple<Type<'db>> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         match self {
             Tuple::Fixed(tuple) => Some(Tuple::Fixed(
-                tuple.recursive_type_normalized_impl(db, div, nested, visitor)?,
+                tuple.recursive_type_normalized_impl(db, div, nested)?,
             )),
             Tuple::Variable(tuple) => Some(Tuple::Variable(
-                tuple.recursive_type_normalized_impl(db, div, nested, visitor)?,
+                tuple.recursive_type_normalized_impl(db, div, nested)?,
             )),
         }
     }
@@ -1462,7 +1504,7 @@ impl<'db> Tuple<Type<'db>> {
             // those techniques ensure that union elements are deduplicated and unions are eagerly simplified
             // into other types where necessary. Here, however, we know that there are no duplicates
             // in this union, so it's probably more efficient to use `UnionType::new()` directly.
-            Type::Union(UnionType::new(db, elements))
+            Type::Union(UnionType::new(db, elements, RecursivelyDefined::No))
         };
 
         TupleSpec::heterogeneous([
@@ -1607,6 +1649,7 @@ pub(crate) enum ResizeTupleError {
 }
 
 /// A builder for creating a new [`TupleSpec`]
+#[derive(Clone)]
 pub(crate) enum TupleSpecBuilder<'db> {
     Fixed(Vec<Type<'db>>),
     Variable {
@@ -1742,6 +1785,81 @@ impl<'db> TupleSpecBuilder<'db> {
                     suffix: vec![],
                 }
             }
+        }
+    }
+
+    /// Return a new tuple-spec builder that reflects the intersection of this tuple and another tuple.
+    ///
+    /// For example, if `self` is a tuple-spec builder for `tuple[int, str]` and `other` is a
+    /// tuple-spec for `tuple[object, object]`, the result will be a tuple-spec builder for
+    /// `tuple[int, str]` (since `int & object` simplifies to `int`, and `str & object` to `str`).
+    pub(crate) fn intersect(mut self, db: &'db dyn Db, other: &TupleSpec<'db>) -> Self {
+        match (&mut self, other) {
+            // Both fixed-length with the same length: element-wise intersection.
+            (TupleSpecBuilder::Fixed(our_elements), TupleSpec::Fixed(new_elements))
+                if our_elements.len() == new_elements.len() =>
+            {
+                for (existing, new) in our_elements.iter_mut().zip(new_elements.elements()) {
+                    *existing = IntersectionType::from_elements(db, [*existing, *new]);
+                }
+                return self;
+            }
+
+            (TupleSpecBuilder::Fixed(our_elements), TupleSpec::Variable(var)) => {
+                if let Ok(tuple) = var.resize(db, TupleLength::Fixed(our_elements.len())) {
+                    return self.intersect(db, &tuple);
+                }
+            }
+
+            (TupleSpecBuilder::Variable { .. }, TupleSpec::Fixed(fixed)) => {
+                if let Ok(tuple) = self
+                    .clone()
+                    .build()
+                    .resize(db, TupleLength::Fixed(fixed.len()))
+                {
+                    return TupleSpecBuilder::from(&tuple).intersect(db, other);
+                }
+            }
+
+            (
+                TupleSpecBuilder::Variable {
+                    prefix,
+                    variable,
+                    suffix,
+                },
+                TupleSpec::Variable(var),
+            ) => {
+                if prefix.len() == var.prefix.len() && suffix.len() == var.suffix.len() {
+                    for (existing, new) in prefix.iter_mut().zip(var.prefix_elements()) {
+                        *existing = IntersectionType::from_elements(db, [*existing, *new]);
+                    }
+                    *variable = IntersectionType::from_elements(db, [*variable, var.variable]);
+                    for (existing, new) in suffix.iter_mut().zip(var.suffix_elements()) {
+                        *existing = IntersectionType::from_elements(db, [*existing, *new]);
+                    }
+                    return self;
+                }
+
+                let self_built = self.clone().build();
+                let self_len = self_built.len();
+                if let Ok(resized) = var.resize(db, self_len) {
+                    return self.intersect(db, &resized);
+                } else if let Ok(resized) = self_built.resize(db, var.len()) {
+                    return TupleSpecBuilder::from(&resized).intersect(db, other);
+                }
+            }
+
+            _ => {}
+        }
+
+        // TODO: probably incorrect? `tuple[int, str] & tuple[int, str, bytes]` should resolve to `Never`.
+        // So maybe this function should be fallible (return an `Option`)?
+        let intersected =
+            IntersectionType::from_elements(db, self.all_elements().chain(other.all_elements()));
+        TupleSpecBuilder::Variable {
+            prefix: vec![],
+            variable: intersected,
+            suffix: vec![],
         }
     }
 

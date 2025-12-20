@@ -113,10 +113,7 @@ pub(crate) fn attribute_assignments<'db, 's>(
         let place_table = index.place_table(function_scope_id);
         let member = place_table.member_id_by_instance_attribute_name(name)?;
         let use_def = &index.use_def_maps[function_scope_id];
-        Some((
-            use_def.all_reachable_member_bindings(member),
-            function_scope_id,
-        ))
+        Some((use_def.reachable_member_bindings(member), function_scope_id))
     })
 }
 
@@ -138,7 +135,7 @@ pub(crate) fn attribute_declarations<'db, 's>(
         let member = place_table.member_id_by_instance_attribute_name(name)?;
         let use_def = &index.use_def_maps[function_scope_id];
         Some((
-            use_def.all_reachable_member_declarations(member),
+            use_def.reachable_member_declarations(member),
             function_scope_id,
         ))
     })
@@ -523,6 +520,11 @@ impl<'db> SemanticIndex<'db> {
     #[track_caller]
     pub(crate) fn node_scope(&self, node: NodeWithScopeRef) -> FileScopeId {
         self.scopes_by_node[&node.node_key()]
+    }
+
+    /// Returns the id of the scope that `node` creates, if it exists.
+    pub(crate) fn try_node_scope(&self, node: NodeWithScopeRef) -> Option<FileScopeId> {
+        self.scopes_by_node.get(&node.node_key()).copied()
     }
 
     /// Checks if there is an import of `__future__.annotations` in the global scope, which affects

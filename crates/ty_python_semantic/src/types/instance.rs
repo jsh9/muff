@@ -304,6 +304,14 @@ impl<'db> NominalInstanceType<'db> {
         matches!(self.0, NominalInstanceInner::Object)
     }
 
+    pub(super) fn is_definition_generic(self) -> bool {
+        match self.0 {
+            NominalInstanceInner::NonTuple(class) => class.is_generic(),
+            NominalInstanceInner::ExactTuple(_) => true,
+            NominalInstanceInner::Object => false,
+        }
+    }
+
     /// If this type is an *exact* tuple type (*not* a subclass of `tuple`), returns the
     /// tuple spec.
     ///
@@ -379,16 +387,15 @@ impl<'db> NominalInstanceType<'db> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         match self.0 {
             NominalInstanceInner::ExactTuple(tuple) => {
                 Some(Self(NominalInstanceInner::ExactTuple(
-                    tuple.recursive_type_normalized_impl(db, div, nested, visitor)?,
+                    tuple.recursive_type_normalized_impl(db, div, nested)?,
                 )))
             }
             NominalInstanceInner::NonTuple(class) => Some(Self(NominalInstanceInner::NonTuple(
-                class.recursive_type_normalized_impl(db, div, nested, visitor)?,
+                class.recursive_type_normalized_impl(db, div, nested)?,
             ))),
             NominalInstanceInner::Object => Some(Self(NominalInstanceInner::Object)),
         }
@@ -750,12 +757,9 @@ impl<'db> ProtocolInstanceType<'db> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         Some(Self {
-            inner: self
-                .inner
-                .recursive_type_normalized_impl(db, div, nested, visitor)?,
+            inner: self.inner.recursive_type_normalized_impl(db, div, nested)?,
             _phantom: PhantomData,
         })
     }
@@ -877,14 +881,13 @@ impl<'db> Protocol<'db> {
         db: &'db dyn Db,
         div: Type<'db>,
         nested: bool,
-        visitor: &NormalizedVisitor<'db>,
     ) -> Option<Self> {
         match self {
             Self::FromClass(class) => Some(Self::FromClass(
-                class.recursive_type_normalized_impl(db, div, nested, visitor)?,
+                class.recursive_type_normalized_impl(db, div, nested)?,
             )),
             Self::Synthesized(synthesized) => Some(Self::Synthesized(
-                synthesized.recursive_type_normalized_impl(db, div, nested, visitor)?,
+                synthesized.recursive_type_normalized_impl(db, div, nested)?,
             )),
         }
     }
@@ -963,11 +966,9 @@ mod synthesized_protocol {
             db: &'db dyn Db,
             div: Type<'db>,
             nested: bool,
-            visitor: &NormalizedVisitor<'db>,
         ) -> Option<Self> {
             Some(Self(
-                self.0
-                    .recursive_type_normalized_impl(db, div, nested, visitor)?,
+                self.0.recursive_type_normalized_impl(db, div, nested)?,
             ))
         }
     }

@@ -237,7 +237,7 @@ class InvalidBoolDunder:
     def __bool__(self) -> int:
         return 1
 
-# error: [unsupported-bool-conversion]  "Boolean conversion is unsupported for type `InvalidBoolDunder`"
+# error: [unsupported-bool-conversion]  "Boolean conversion is not supported for type `InvalidBoolDunder`"
 static_assert(InvalidBoolDunder())
 ```
 
@@ -398,7 +398,7 @@ the expression `str`:
 from ty_extensions import TypeOf, is_subtype_of, static_assert
 
 # This is incorrect and therefore fails with ...
-# error: "Static assertion error: argument of type `ty_extensions.ConstraintSet[never]` is statically known to be falsy"
+# error: "Static assertion error: argument of type `ty_extensions.ConstraintSet` is statically known to be falsy"
 static_assert(is_subtype_of(str, type[str]))
 
 # Correct, returns True:

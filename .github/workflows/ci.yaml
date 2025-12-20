@@ -24,6 +24,8 @@ env:
   PACKAGE_NAME: ruff
   PYTHON_VERSION: "3.14"
   NEXTEST_PROFILE: ci
+  # Enable mdtests that require external dependencies
+  MDTEST_EXTERNAL: "1"
 
 jobs:
   determine_changes:
@@ -230,7 +232,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -252,7 +254,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           shared-key: ruff-linux-debug
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -261,11 +263,11 @@ jobs:
       - name: "Install mold"
         uses: rui314/setup-mold@725a8794d15fc7563f59595bd9556495c0564878 # v1
       - name: "Install cargo nextest"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-nextest
       - name: "Install cargo insta"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-insta
       - name: "Install uv"
@@ -296,7 +298,7 @@ jobs:
       # sync, not just public items. Eventually we should do this for all
       # crates; for now add crates here as they are warning-clean to prevent
       # regression.
-      - run: cargo doc --no-deps -p ty_python_semantic -p ty -p ty_test -p ruff_db --document-private-items
+      - run: cargo doc --no-deps -p ty_python_semantic -p ty -p ty_test -p ruff_db -p ruff_python_formatter --document-private-items
         env:
           # Setting RUSTDOCFLAGS because `cargo doc --check` isn't yet implemented (https://github.com/rust-lang/cargo/issues/10025).
           RUSTDOCFLAGS: "-D warnings"
@@ -315,7 +317,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -323,7 +325,7 @@ jobs:
       - name: "Install mold"
         uses: rui314/setup-mold@725a8794d15fc7563f59595bd9556495c0564878 # v1
       - name: "Install cargo nextest"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-nextest
       - name: "Install uv"
@@ -350,13 +352,13 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
         run: rustup show
       - name: "Install cargo nextest"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-nextest
       - name: "Install uv"
@@ -378,7 +380,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -415,7 +417,7 @@ jobs:
         with:
           file: "Cargo.toml"
           field: "workspace.package.rust-version"
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -439,7 +441,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           workspaces: "fuzz -> target"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -448,7 +450,7 @@ jobs:
       - name: "Install mold"
         uses: rui314/setup-mold@725a8794d15fc7563f59595bd9556495c0564878 # v1
       - name: "Install cargo-binstall"
-        uses: cargo-bins/cargo-binstall@ae04fb5e853ae6cd3ad7de4a1d554a8b646d12aa # v1.15.11
+        uses: cargo-bins/cargo-binstall@3fc81674af4165a753833a94cae9f91d8849049f # v1.16.2
       - name: "Install cargo-fuzz"
         # Download the latest version from quick install and not the github releases because github releases only has MUSL targets.
         run: cargo binstall cargo-fuzz --force  --disable-strategies crate-meta-data --no-confirm
@@ -467,7 +469,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           shared-key: ruff-linux-debug
           save-if: false
@@ -498,7 +500,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
@@ -547,7 +549,7 @@ jobs:
       - name: "Install mold"
         uses: rui314/setup-mold@725a8794d15fc7563f59595bd9556495c0564878 # v1
 
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           shared-key: ruff-linux-debug
           save-if: false
@@ -643,7 +645,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -688,7 +690,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: cargo-bins/cargo-binstall@ae04fb5e853ae6cd3ad7de4a1d554a8b646d12aa # v1.15.11
+      - uses: cargo-bins/cargo-binstall@3fc81674af4165a753833a94cae9f91d8849049f # v1.16.2
       - run: cargo binstall --no-confirm cargo-shear
       - run: cargo shear
 
@@ -702,7 +704,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -723,11 +725,11 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Prep README.md"
@@ -753,7 +755,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -779,20 +781,13 @@ jobs:
     name: "mkdocs"
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      MKDOCS_INSIDERS_SSH_KEY_EXISTS: ${{ secrets.MKDOCS_INSIDERS_SSH_KEY != '' }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: "Add SSH key"
-        if: ${{ env.MKDOCS_INSIDERS_SSH_KEY_EXISTS == 'true' }}
-        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
-        with:
-          ssh-private-key: ${{ secrets.MKDOCS_INSIDERS_SSH_KEY }}
       - name: "Install Rust toolchain"
         run: rustup show
       - name: Install uv
@@ -800,11 +795,7 @@ jobs:
         with:
           python-version: 3.13
           activate-environment: true
-      - name: "Install Insiders dependencies"
-        if: ${{ env.MKDOCS_INSIDERS_SSH_KEY_EXISTS == 'true' }}
-        run: uv pip install -r docs/requirements-insiders.txt
       - name: "Install dependencies"
-        if: ${{ env.MKDOCS_INSIDERS_SSH_KEY_EXISTS != 'true' }}
         run: uv pip install -r docs/requirements.txt
       - name: "Update README File"
         run: python scripts/transform_readme.py --target mkdocs
@@ -812,12 +803,8 @@ jobs:
         run: python scripts/generate_mkdocs.py
       - name: "Check docs formatting"
         run: python scripts/check_docs_formatted.py
-      - name: "Build Insiders docs"
-        if: ${{ env.MKDOCS_INSIDERS_SSH_KEY_EXISTS == 'true' }}
-        run: mkdocs build --strict -f mkdocs.insiders.yml
       - name: "Build docs"
-        if: ${{ env.MKDOCS_INSIDERS_SSH_KEY_EXISTS != 'true' }}
-        run: mkdocs build --strict -f mkdocs.public.yml
+        run: mkdocs build --strict -f mkdocs.yml
 
   check-formatter-instability-and-black-similarity:
     name: "formatter instabilities and black similarity"
@@ -829,7 +816,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Install Rust toolchain"
@@ -857,7 +844,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           shared-key: ruff-linux-debug
           save-if: false
@@ -875,7 +862,7 @@ jobs:
           repository: "astral-sh/ruff-lsp"
           path: ruff-lsp
 
-      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
           # installation fails on 3.13 and newer
           python-version: "3.12"
@@ -908,7 +895,7 @@ jobs:
           persist-credentials: false
       - name: "Install Rust toolchain"
         run: rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -918,7 +905,7 @@ jobs:
           cache-dependency-path: playground/package-lock.json
       - uses: jetli/wasm-bindgen-action@20b33e20595891ab1a0ed73145d8a21fc96e7c29 # v0.2.0
       - name: "Install Node dependencies"
-        run: npm ci
+        run: npm ci --ignore-scripts
         working-directory: playground
       - name: "Build playgrounds"
         run: npm run dev:wasm
@@ -942,13 +929,16 @@ jobs:
         needs.determine_changes.outputs.linter == 'true'
       )
     timeout-minutes: 20
+    permissions:
+      contents: read # required for actions/checkout
+      id-token: write # required for OIDC authentication with CodSpeed
     steps:
       - name: "Checkout Branch"
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
@@ -957,7 +947,7 @@ jobs:
         run: rustup show
 
       - name: "Install codspeed"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-codspeed
 
@@ -965,11 +955,10 @@ jobs:
         run: cargo codspeed build --features "codspeed,instrumented" --profile profiling --no-default-features -p ruff_benchmark --bench formatter --bench lexer --bench linter --bench parser
 
       - name: "Run benchmarks"
-        uses: CodSpeedHQ/action@6a8e2b874c338bf81cc5e8be715ada75908d3871 # v4.3.4
+        uses: CodSpeedHQ/action@346a2d8a8d9d38909abd0bc3d23f773110f076ad # v4.4.1
         with:
-          mode: instrumentation
+          mode: simulation
           run: cargo codspeed run
-          token: ${{ secrets.CODSPEED_TOKEN }}
 
   benchmarks-instrumented-ty:
     name: "benchmarks instrumented (ty)"
@@ -982,13 +971,16 @@ jobs:
         needs.determine_changes.outputs.ty == 'true'
       )
     timeout-minutes: 20
+    permissions:
+      contents: read # required for actions/checkout
+      id-token: write # required for OIDC authentication with CodSpeed
     steps:
       - name: "Checkout Branch"
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
@@ -997,7 +989,7 @@ jobs:
         run: rustup show
 
       - name: "Install codspeed"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-codspeed
 
@@ -1005,11 +997,10 @@ jobs:
         run: cargo codspeed build --features "codspeed,instrumented" --profile profiling --no-default-features -p ruff_benchmark --bench ty
 
       - name: "Run benchmarks"
-        uses: CodSpeedHQ/action@6a8e2b874c338bf81cc5e8be715ada75908d3871 # v4.3.4
+        uses: CodSpeedHQ/action@346a2d8a8d9d38909abd0bc3d23f773110f076ad # v4.4.1
         with:
-          mode: instrumentation
+          mode: simulation
           run: cargo codspeed run
-          token: ${{ secrets.CODSPEED_TOKEN }}
 
   benchmarks-walltime:
     name: "benchmarks walltime (${{ matrix.benchmarks }})"
@@ -1017,6 +1008,9 @@ jobs:
     needs: determine_changes
     if: ${{ github.repository == 'astral-sh/ruff' && !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.ty == 'true' || github.ref == 'refs/heads/main') }}
     timeout-minutes: 20
+    permissions:
+      contents: read # required for actions/checkout
+      id-token: write # required for OIDC authentication with CodSpeed
     strategy:
       matrix:
         benchmarks:
@@ -1028,7 +1022,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
@@ -1037,7 +1031,7 @@ jobs:
         run: rustup show
 
       - name: "Install codspeed"
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9 # v2.62.56
+        uses: taiki-e/install-action@3575e532701a5fc614b0c842e4119af4cc5fd16d # v2.62.60
         with:
           tool: cargo-codspeed
 
@@ -1045,7 +1039,7 @@ jobs:
         run: cargo codspeed build --features "codspeed,walltime" --profile profiling --no-default-features -p ruff_benchmark
 
       - name: "Run benchmarks"
-        uses: CodSpeedHQ/action@6a8e2b874c338bf81cc5e8be715ada75908d3871 # v4.3.4
+        uses: CodSpeedHQ/action@346a2d8a8d9d38909abd0bc3d23f773110f076ad # v4.4.1
         env:
           # enabling walltime flamegraphs adds ~6 minutes to the CI time, and they don't
           # appear to provide much useful insight for our walltime benchmarks right now
@@ -1054,4 +1048,3 @@ jobs:
         with:
           mode: walltime
           run: cargo codspeed run --bench ty_walltime "${{ matrix.benchmarks }}"
-          token: ${{ secrets.CODSPEED_TOKEN }}

@@ -29,11 +29,15 @@
 
 mod code_actions;
 mod commands;
+mod completions;
 mod initialize;
 mod inlay_hints;
 mod notebook;
 mod publish_diagnostics;
 mod pull_diagnostics;
+mod rename;
+mod semantic_tokens;
+mod signature_help;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::num::NonZeroUsize;
@@ -51,26 +55,28 @@ use lsp_types::notification::{
     Initialized, Notification,
 };
 use lsp_types::request::{
-    DocumentDiagnosticRequest, HoverRequest, Initialize, InlayHintRequest, Request, Shutdown,
-    WorkspaceConfiguration, WorkspaceDiagnosticRequest,
+    Completion, DocumentDiagnosticRequest, HoverRequest, Initialize, InlayHintRequest,
+    PrepareRenameRequest, Request, Shutdown, SignatureHelpRequest, WorkspaceConfiguration,
+    WorkspaceDiagnosticRequest,
 };
 use lsp_types::{
-    ClientCapabilities, ConfigurationParams, DiagnosticClientCapabilities,
+    ClientCapabilities, CompletionItem, CompletionParams, CompletionResponse,
+    CompletionTriggerKind, ConfigurationParams, DiagnosticClientCapabilities,
     DidChangeTextDocumentParams, DidChangeWatchedFilesClientCapabilities,
     DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentDiagnosticParams, DocumentDiagnosticReportResult, FileEvent, Hover, HoverParams,
     InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintClientCapabilities,
     InlayHintParams, NumberOrString, PartialResultParams, Position, PreviousResultId,
-    PublishDiagnosticsClientCapabilities, Range, TextDocumentClientCapabilities,
+    PublishDiagnosticsClientCapabilities, Range, SemanticTokensResult, SignatureHelp,
+    SignatureHelpParams, SignatureHelpTriggerKind, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, Url, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
     WorkspaceClientCapabilities, WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult,
-    WorkspaceFolder,
+    WorkspaceEdit, WorkspaceFolder,
 };
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf, TestSystem};
 use rustc_hash::FxHashMap;
 use tempfile::TempDir;
-
 use ty_server::{ClientOptions, LogLevel, Server, init_logging};
 
 /// Number of times to retry receiving a message before giving up
@@ -205,6 +211,7 @@ impl TestServer {
         test_context: TestContext,
         capabilities: ClientCapabilities,
         initialization_options: Option<ClientOptions>,
+        env_vars: Vec<(String, String)>,
     ) -> Self {
         setup_tracing();
 
@@ -215,11 +222,16 @@ impl TestServer {
         // Create OS system with the test directory as cwd
         let os_system = OsSystem::new(test_context.root());
 
+        // Create test system and set environment variable overrides
+        let test_system = Arc::new(TestSystem::new(os_system));
+        for (name, value) in env_vars {
+            test_system.set_env_var(name, value);
+        }
+
         // Start the server in a separate thread
         let server_thread = std::thread::spawn(move || {
             // TODO: This should probably be configurable to test concurrency issues
             let worker_threads = NonZeroUsize::new(1).unwrap();
-            let test_system = Arc::new(TestSystem::new(os_system));
 
             match Server::new(worker_threads, server_connection, test_system, true) {
                 Ok(server) => {
@@ -415,6 +427,16 @@ impl TestServer {
         R: Request,
     {
         self.try_await_response::<R>(id, None)
+            .unwrap_or_else(|err| panic!("Failed to receive response for request {id}: {err}"))
+    }
+
+    #[track_caller]
+    pub(crate) fn send_request_await<R>(&mut self, params: R::Params) -> R::Result
+    where
+        R: Request,
+    {
+        let id = self.send_request::<R>(params);
+        self.try_await_response::<R>(&id, None)
             .unwrap_or_else(|err| panic!("Failed to receive response for request {id}: {err}"))
     }
 
@@ -742,15 +764,18 @@ impl TestServer {
     }
 
     pub(crate) fn file_uri(&self, path: impl AsRef<SystemPath>) -> Url {
-        Url::from_file_path(self.test_context.root().join(path.as_ref()).as_std_path())
-            .expect("Path must be a valid URL")
+        Url::from_file_path(self.file_path(path).as_std_path()).expect("Path must be a valid URL")
+    }
+
+    pub(crate) fn file_path(&self, path: impl AsRef<SystemPath>) -> SystemPathBuf {
+        self.test_context.root().join(path)
     }
 
     /// Send a `textDocument/didOpen` notification
     pub(crate) fn open_text_document(
         &mut self,
         path: impl AsRef<SystemPath>,
-        content: &impl ToString,
+        content: impl AsRef<str>,
         version: i32,
     ) {
         let params = DidOpenTextDocumentParams {
@@ -758,7 +783,7 @@ impl TestServer {
                 uri: self.file_uri(path),
                 language_id: "python".to_string(),
                 version,
-                text: content.to_string(),
+                text: content.as_ref().to_string(),
             },
         };
         self.send_notification::<DidOpenTextDocument>(params);
@@ -782,7 +807,6 @@ impl TestServer {
     }
 
     /// Send a `textDocument/didClose` notification
-    #[expect(dead_code)]
     pub(crate) fn close_text_document(&mut self, path: impl AsRef<SystemPath>) {
         let params = DidCloseTextDocumentParams {
             text_document: TextDocumentIdentifier {
@@ -793,10 +817,41 @@ impl TestServer {
     }
 
     /// Send a `workspace/didChangeWatchedFiles` notification with the given file events
-    #[expect(dead_code)]
     pub(crate) fn did_change_watched_files(&mut self, events: Vec<FileEvent>) {
         let params = DidChangeWatchedFilesParams { changes: events };
         self.send_notification::<DidChangeWatchedFiles>(params);
+    }
+
+    pub(crate) fn rename(
+        &mut self,
+        document: &Url,
+        position: lsp_types::Position,
+        new_name: &str,
+    ) -> Result<Option<WorkspaceEdit>, ()> {
+        if self
+            .send_request_await::<PrepareRenameRequest>(lsp_types::TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: document.clone(),
+                },
+                position,
+            })
+            .is_none()
+        {
+            return Err(());
+        }
+
+        Ok(
+            self.send_request_await::<lsp_types::request::Rename>(lsp_types::RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: document.clone(),
+                    },
+                    position,
+                },
+                new_name: new_name.to_string(),
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            }),
+        )
     }
 
     /// Send a `textDocument/diagnostic` request for the document at the given path.
@@ -869,6 +924,66 @@ impl TestServer {
         };
         let id = self.send_request::<InlayHintRequest>(params);
         self.await_response::<InlayHintRequest>(&id)
+    }
+
+    /// Sends a `textDocument/completion` request for the document at the given URL and position.
+    pub(crate) fn completion_request(
+        &mut self,
+        uri: &Url,
+        position: Position,
+    ) -> Vec<CompletionItem> {
+        let completions_id = self.send_request::<Completion>(CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+            partial_result_params: lsp_types::PartialResultParams::default(),
+            context: Some(lsp_types::CompletionContext {
+                trigger_kind: CompletionTriggerKind::TRIGGER_FOR_INCOMPLETE_COMPLETIONS,
+                trigger_character: None,
+            }),
+        });
+        match self.await_response::<lsp_types::request::Completion>(&completions_id) {
+            Some(CompletionResponse::Array(array)) => array,
+            Some(CompletionResponse::List(lsp_types::CompletionList { items, .. })) => items,
+            None => vec![],
+        }
+    }
+
+    /// Sends a `textDocument/signatureHelp` request for the document at the given URL and position.
+    pub(crate) fn signature_help_request(
+        &mut self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<SignatureHelp> {
+        let signature_help_id = self.send_request::<SignatureHelpRequest>(SignatureHelpParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+            context: Some(lsp_types::SignatureHelpContext {
+                trigger_kind: SignatureHelpTriggerKind::INVOKED,
+                trigger_character: None,
+                is_retrigger: false,
+                active_signature_help: None,
+            }),
+        });
+        self.await_response::<SignatureHelpRequest>(&signature_help_id)
+    }
+
+    pub(crate) fn semantic_tokens_full_request(
+        &mut self,
+        uri: &Url,
+    ) -> Option<SemanticTokensResult> {
+        self.send_request_await::<lsp_types::request::SemanticTokensFullRequest>(
+            lsp_types::SemanticTokensParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            },
+        )
     }
 }
 
@@ -958,6 +1073,7 @@ pub(crate) struct TestServerBuilder {
     workspaces: Vec<(WorkspaceFolder, Option<ClientOptions>)>,
     initialization_options: Option<ClientOptions>,
     client_capabilities: ClientCapabilities,
+    env_vars: Vec<(String, String)>,
 }
 
 impl TestServerBuilder {
@@ -988,12 +1104,23 @@ impl TestServerBuilder {
             test_context: TestContext::new()?,
             initialization_options: None,
             client_capabilities,
+            env_vars: Vec::new(),
         })
     }
 
     /// Set the initial client options for the test server
     pub(crate) fn with_initialization_options(mut self, options: ClientOptions) -> Self {
         self.initialization_options = Some(options);
+        self
+    }
+
+    /// Set an environment variable for the test server's system.
+    pub(crate) fn with_env_var(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.env_vars.push((name.into(), value.into()));
         self
     }
 
@@ -1054,17 +1181,6 @@ impl TestServerBuilder {
         self
     }
 
-    /// Enable or disable dynamic registration of rename capability
-    pub(crate) fn enable_rename_dynamic_registration(mut self, enabled: bool) -> Self {
-        self.client_capabilities
-            .text_document
-            .get_or_insert_default()
-            .rename
-            .get_or_insert_default()
-            .dynamic_registration = Some(enabled);
-        self
-    }
-
     /// Enable or disable workspace configuration capability
     pub(crate) fn enable_workspace_configuration(mut self, enabled: bool) -> Self {
         self.client_capabilities
@@ -1098,6 +1214,26 @@ impl TestServerBuilder {
         } else {
             None
         };
+        self
+    }
+
+    pub(crate) fn enable_diagnostic_related_information(mut self, enabled: bool) -> Self {
+        self.client_capabilities
+            .text_document
+            .get_or_insert_default()
+            .publish_diagnostics
+            .get_or_insert_default()
+            .related_information = Some(enabled);
+        self
+    }
+
+    pub(crate) fn enable_multiline_token_support(mut self, enabled: bool) -> Self {
+        self.client_capabilities
+            .text_document
+            .get_or_insert_default()
+            .semantic_tokens
+            .get_or_insert_default()
+            .multiline_token_support = Some(enabled);
         self
     }
 
@@ -1144,6 +1280,7 @@ impl TestServerBuilder {
             self.test_context,
             self.client_capabilities,
             self.initialization_options,
+            self.env_vars,
         )
     }
 }

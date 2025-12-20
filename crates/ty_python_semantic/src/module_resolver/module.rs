@@ -120,7 +120,7 @@ impl std::fmt::Debug for Module<'_> {
 }
 
 #[allow(clippy::ref_option)]
-#[salsa::tracked(returns(ref))]
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 fn all_submodule_names_for_package<'db>(
     db: &'db dyn Db,
     module: Module<'db>,
@@ -319,6 +319,7 @@ pub enum KnownModule {
     Tempfile,
     Pathlib,
     Abc,
+    Contextlib,
     Dataclasses,
     Collections,
     Inspect,
@@ -351,6 +352,7 @@ impl KnownModule {
             Self::Tempfile => "tempfile",
             Self::Pathlib => "pathlib",
             Self::Abc => "abc",
+            Self::Contextlib => "contextlib",
             Self::Dataclasses => "dataclasses",
             Self::Collections => "collections",
             Self::Inspect => "inspect",

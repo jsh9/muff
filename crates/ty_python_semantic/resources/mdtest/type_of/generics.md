@@ -123,11 +123,11 @@ class A:
 A class `A` is a subtype of `type[T]` if any instance of `A` is a subtype of `T`.
 
 ```py
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 from ty_extensions import is_assignable_to, is_subtype_of, is_disjoint_from, static_assert
 
-class IntCallback(Protocol):
-    def __call__(self, *args, **kwargs) -> int: ...
+class Callback[T](Protocol):
+    def __call__(self, *args, **kwargs) -> T: ...
 
 def _[T](_: T):
     static_assert(not is_subtype_of(type[T], T))
@@ -141,8 +141,11 @@ def _[T](_: T):
     static_assert(is_assignable_to(type[T], Callable[..., T]))
     static_assert(not is_disjoint_from(type[T], Callable[..., T]))
 
-    static_assert(not is_assignable_to(type[T], IntCallback))
-    static_assert(not is_disjoint_from(type[T], IntCallback))
+    static_assert(is_assignable_to(type[T], Callable[..., T] | Callable[..., Any]))
+    static_assert(not is_disjoint_from(type[T], Callable[..., T] | Callable[..., Any]))
+
+    static_assert(not is_assignable_to(type[T], Callback[int]))
+    static_assert(not is_disjoint_from(type[T], Callback[int]))
 
 def _[T: int](_: T):
     static_assert(not is_subtype_of(type[T], T))
@@ -157,14 +160,23 @@ def _[T: int](_: T):
     static_assert(is_subtype_of(type[T], type[int]))
     static_assert(not is_disjoint_from(type[T], type[int]))
 
+    static_assert(is_subtype_of(type[T], type[int] | None))
+    static_assert(not is_disjoint_from(type[T], type[int] | None))
+
     static_assert(is_subtype_of(type[T], type[T]))
     static_assert(not is_disjoint_from(type[T], type[T]))
 
     static_assert(is_assignable_to(type[T], Callable[..., T]))
     static_assert(not is_disjoint_from(type[T], Callable[..., T]))
 
-    static_assert(is_assignable_to(type[T], IntCallback))
-    static_assert(not is_disjoint_from(type[T], IntCallback))
+    static_assert(is_assignable_to(type[T], Callable[..., T] | Callable[..., Any]))
+    static_assert(not is_disjoint_from(type[T], Callable[..., T] | Callable[..., Any]))
+
+    static_assert(is_assignable_to(type[T], Callback[int]))
+    static_assert(not is_disjoint_from(type[T], Callback[int]))
+
+    static_assert(is_assignable_to(type[T], Callback[int] | Callback[Any]))
+    static_assert(not is_disjoint_from(type[T], Callback[int] | Callback[Any]))
 
     static_assert(is_subtype_of(type[T], type[T] | None))
     static_assert(not is_disjoint_from(type[T], type[T] | None))
@@ -183,8 +195,14 @@ def _[T: (int, str)](_: T):
     static_assert(is_assignable_to(type[T], Callable[..., T]))
     static_assert(not is_disjoint_from(type[T], Callable[..., T]))
 
-    static_assert(not is_assignable_to(type[T], IntCallback))
-    static_assert(not is_disjoint_from(type[T], IntCallback))
+    static_assert(is_assignable_to(type[T], Callable[..., T] | Callable[..., Any]))
+    static_assert(not is_disjoint_from(type[T], Callable[..., T] | Callable[..., Any]))
+
+    static_assert(not is_assignable_to(type[T], Callback[int]))
+    static_assert(not is_disjoint_from(type[T], Callback[int]))
+
+    static_assert(is_assignable_to(type[T], Callback[int | str]))
+    static_assert(not is_disjoint_from(type[T], Callback[int] | Callback[str]))
 
     static_assert(is_subtype_of(type[T], type[T] | None))
     static_assert(not is_disjoint_from(type[T], type[T] | None))
@@ -207,6 +225,17 @@ def _[T: (int, str)](_: T):
 def _[T: (int | str, int)](_: T):
     static_assert(is_subtype_of(type[int], type[T]))
     static_assert(not is_disjoint_from(type[int], type[T]))
+```
+
+```py
+class X[T]:
+    value: T
+
+    def get(self) -> T:
+        return self.value
+
+def _[T](x: X[type[T]]):
+    reveal_type(x.get())  # revealed: type[T@_]
 ```
 
 ## Generic Type Inference
@@ -244,4 +273,181 @@ class Foo[T]: ...
 # TODO: This should not error.
 # error: [invalid-parameter-default] "Default value of type `<class 'Foo'>` is not assignable to annotated parameter type `type[T@f]`"
 def f[T: Foo[Any]](x: type[T] = Foo): ...
+```
+
+## Display of generic `type[]` types
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Generic, TypeVar
+
+class Foo[T]: ...
+
+S = TypeVar("S")
+
+class Bar(Generic[S]): ...
+
+def _(x: Foo[int], y: Bar[str], z: list[bytes]):
+    reveal_type(type(x))  # revealed: type[Foo[int]]
+    reveal_type(type(y))  # revealed: type[Bar[str]]
+    reveal_type(type(z))  # revealed: type[list[bytes]]
+```
+
+## Checking generic `type[]` types
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+class C[T]:
+    pass
+
+class D[T]:
+    pass
+
+var: type[C[int]] = C[int]
+var: type[C[int]] = D[int]  # error: [invalid-assignment] "Object of type `<class 'D[int]'>` is not assignable to `type[C[int]]`"
+```
+
+However, generic `Protocol` classes are still TODO:
+
+```py
+from typing import Protocol
+
+class Proto[U](Protocol):
+    def some_method(self): ...
+
+# TODO: should be error: [invalid-assignment]
+var: type[Proto[int]] = C[int]
+
+def _(p: type[Proto[int]]):
+    reveal_type(p)  # revealed: type[@Todo(type[T] for protocols)]
+```
+
+## Generic `@final` classes
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+An unspecialized generic final class object is assignable to its default-specialized `type[]` type
+(which is actually internally simplified to a GenericAlias type, since there cannot be subclasses.)
+
+```py
+from typing import final
+
+@final
+class P[T]:
+    x: T
+
+def expects_type_p(x: type[P]):
+    pass
+
+def expects_type_p_of_int(x: type[P[int]]):
+    pass
+
+# OK, the default specialization of `P` is assignable to `type[P[Unknown]]`
+expects_type_p(P)
+
+# Also OK, because `P[int]` and `P[str]` are both assignable to `P[Unknown]`
+expects_type_p(P[int])
+expects_type_p(P[str])
+
+# Also OK, because the default specialization is `P[Unknown]` which is assignable to `P[int]`
+expects_type_p_of_int(P)
+expects_type_p_of_int(P[int])
+
+# Not OK, because `P[str]` is not assignable to `P[int]`
+expects_type_p_of_int(P[str])  # error: [invalid-argument-type]
+```
+
+The same principles apply when typevar defaults are used, but the results are a bit different
+because the default-specialization is no longer a forgiving `Unknown` type:
+
+```py
+@final
+class P[T = str]:
+    x: T
+
+def expects_type_p(x: type[P]):
+    pass
+
+def expects_type_p_of_int(x: type[P[int]]):
+    pass
+
+def expects_type_p_of_str(x: type[P[str]]):
+    pass
+
+# OK, the default specialization is now `P[str]`, but we have the default specialization on both
+# sides, so it is assignable.
+expects_type_p(P)
+
+# Also OK if the explicit specialization lines up with the default, in either direction:
+expects_type_p(P[str])
+expects_type_p_of_str(P)
+expects_type_p_of_str(P[str])
+
+# Not OK if the specializations don't line up:
+expects_type_p(P[int])  # error: [invalid-argument-type]
+expects_type_p_of_int(P[str])  # error: [invalid-argument-type]
+expects_type_p_of_int(P)  # error: [invalid-argument-type]
+expects_type_p_of_str(P[int])  # error: [invalid-argument-type]
+```
+
+This also works with `ParamSpec`:
+
+```py
+@final
+class C[**P]: ...
+
+def expects_type_c(f: type[C]): ...
+def expects_type_c_of_int_and_str(x: type[C[int, str]]): ...
+
+# OK, the unspecialized `C` is assignable to `type[C[...]]`
+expects_type_c(C)
+
+# Also OK, any specialization is assignable to the unspecialized `C`
+expects_type_c(C[int])
+expects_type_c(C[str, int, bytes])
+
+# Ok, the unspecialized `C` is assignable to `type[C[int, str]]`
+expects_type_c_of_int_and_str(C)
+
+# Also OK, the specialized `C[int, str]` is assignable to `type[C[int, str]]`
+expects_type_c_of_int_and_str(C[int, str])
+
+# TODO: these should be errors
+expects_type_c_of_int_and_str(C[str])
+expects_type_c_of_int_and_str(C[int, str, bytes])
+expects_type_c_of_int_and_str(C[str, int])
+```
+
+And with a `ParamSpec` that has a default:
+
+```py
+@final
+class C[**P = [int, str]]: ...
+
+def expects_type_c_default(f: type[C]): ...
+def expects_type_c_default_of_int(f: type[C[int]]): ...
+def expects_type_c_default_of_int_str(f: type[C[int, str]]): ...
+
+expects_type_c_default(C)
+expects_type_c_default(C[int, str])
+expects_type_c_default_of_int(C)
+expects_type_c_default_of_int(C[int])
+expects_type_c_default_of_int_str(C)
+expects_type_c_default_of_int_str(C[int, str])
+
+# TODO: these should be errors
+expects_type_c_default(C[int])
+expects_type_c_default_of_int(C[str])
+expects_type_c_default_of_int_str(C[str, int])
 ```
