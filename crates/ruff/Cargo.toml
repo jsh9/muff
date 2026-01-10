@@ -1,6 +1,6 @@
 [package]
 name = "ruff"
-version = "0.14.10"
+version = "0.14.11"
 publish = true
 authors = { workspace = true }
 edition = { workspace = true }
@@ -15,6 +15,13 @@ default-run = "muff"
 [[bin]]
 name = "muff"
 path = "src/main.rs"
+
+[package.metadata.cargo-shear]
+# Used via macro expansion.
+ignored = ["jiff"]
+
+[package.metadata.dist]
+dist = true
 
 [dependencies]
 ruff_cache = { workspace = true }
@@ -45,6 +52,7 @@ colored = { workspace = true }
 filetime = { workspace = true }
 globwalk = { workspace = true }
 ignore = { workspace = true }
+indexmap = { workspace = true }
 is-macro = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
@@ -65,6 +73,12 @@ tracing = { workspace = true, features = ["log"] }
 walkdir = { workspace = true }
 wild = { workspace = true }
 
+[target.'cfg(all(not(target_os = "windows"), not(target_os = "openbsd"), not(target_os = "aix"), not(target_os = "android"), any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "powerpc64", target_arch = "riscv64")))'.dependencies]
+tikv-jemallocator = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+mimalloc = { workspace = true }
+
 [dev-dependencies]
 # Enable test rules during development
 ruff_linter = { workspace = true, features = ["clap", "test-rules"] }
@@ -79,19 +93,6 @@ insta-cmd = { workspace = true }
 ruff_python_trivia = { workspace = true }
 tempfile = { workspace = true }
 test-case = { workspace = true }
-
-[package.metadata.cargo-shear]
-# Used via macro expansion.
-ignored = ["jiff"]
-
-[package.metadata.dist]
-dist = true
-
-[target.'cfg(target_os = "windows")'.dependencies]
-mimalloc = { workspace = true }
-
-[target.'cfg(all(not(target_os = "windows"), not(target_os = "openbsd"), not(target_os = "aix"), not(target_os = "android"), any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "powerpc64", target_arch = "riscv64")))'.dependencies]
-tikv-jemallocator = { workspace = true }
 
 [lints]
 workspace = true
