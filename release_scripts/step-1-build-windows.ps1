@@ -22,24 +22,53 @@ function Test-Command {
 
 Write-Host "Checking prerequisites..." -ForegroundColor Cyan
 Test-Command "python" "Python 3 from python.org or 'winget install Python.Python.3.11'"
-Test-Command "pip" "Python pip (included with Python)"
 Test-Command "cargo" "Rust from rustup.rs or 'winget install Rustlang.Rustup'"
 
-# Create and activate virtual environment
-$VENV_DIR = "$env:USERPROFILE\.muff-build-env"
+# Create virtual environment
+$VENV_DIR = Join-Path $env:USERPROFILE ".muff-build-env"
+$VENV_SCRIPTS = Join-Path $VENV_DIR "Scripts"
+$VENV_PYTHON = Join-Path $VENV_SCRIPTS "python.exe"
 Write-Host "Setting up build environment..." -ForegroundColor Cyan
 
-if (!(Test-Path $VENV_DIR)) {
+function New-BuildVenv {
+    if (Test-Path $VENV_DIR) {
+        Write-Host "Removing incomplete virtual environment..." -ForegroundColor Yellow
+        Remove-Item -Path $VENV_DIR -Recurse -Force
+    }
+
     Write-Host "Creating virtual environment..." -ForegroundColor Yellow
     python -m venv "$VENV_DIR"
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Failed to create virtual environment at $VENV_DIR" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
 }
 
-Write-Host "Activating virtual environment..." -ForegroundColor Yellow
-& "$VENV_DIR\Scripts\Activate.ps1"
+if (!(Test-Path $VENV_DIR) -or !(Test-Path $VENV_PYTHON)) {
+    New-BuildVenv
+}
+
+if (!(Test-Path $VENV_PYTHON)) {
+    Write-Host "ERROR: Virtual environment is missing Python: $VENV_PYTHON" -ForegroundColor Red
+    exit 1
+}
+
+$env:PATH = "$VENV_SCRIPTS;$env:PATH"
 
 # Install maturin
 Write-Host "Installing maturin..." -ForegroundColor Yellow
-pip install --upgrade pip maturin
+& $VENV_PYTHON -m ensurepip --upgrade
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Failed to bootstrap pip in virtual environment" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
+& $VENV_PYTHON -m pip install --upgrade pip maturin
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Failed to install maturin in virtual environment" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
 # Check for Visual Studio Build Tools and set targets accordingly
 Write-Host "Checking for Visual Studio Build Tools..." -ForegroundColor Cyan
@@ -154,11 +183,11 @@ $readmeBackup = [System.IO.Path]::GetTempFileName()
 if (Test-Path $readme) { Copy-Item $readme $readmeBackup -Force }
 # Also register exit handler to restore on unexpected termination
 try { Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action { if (Test-Path $using:readmeBackup) { Copy-Item $using:readmeBackup $using:readme -Force; Remove-Item $using:readmeBackup -Force } } | Out-Null } catch { }
-python scripts\transform_readme.py --target pypi
+& $VENV_PYTHON scripts\transform_readme.py --target pypi
 
 # Build source distribution
 Write-Host "Building source distribution..." -ForegroundColor Cyan
-maturin sdist --out dist
+& $VENV_PYTHON -m maturin sdist --out dist
 
 # Function to build for a specific target
 function Build-Target {
@@ -172,7 +201,7 @@ function Build-Target {
         if ($Target -eq "x86_64-pc-windows-gnu") {
             $env:CARGO_BUILD_TARGET = $Target
         }
-        maturin build --release --locked --target $Target --out dist
+        & $VENV_PYTHON -m maturin build --release --locked --target $Target --out dist
         Write-Host "SUCCESS: Wheel built for $Target" -ForegroundColor Green
     }
     catch {
@@ -237,8 +266,14 @@ if ($wheelFiles.Count -gt 0) {
     Write-Host "Testing wheel: $wheelFile" -ForegroundColor Yellow
 
     try {
-        pip install $wheelFile --force-reinstall
-        & $MODULE_NAME --help | Out-Null
+        & $VENV_PYTHON -m pip install $wheelFile --force-reinstall
+        $moduleExe = Join-Path $VENV_SCRIPTS "$MODULE_NAME.exe"
+        if (Test-Path $moduleExe) {
+            & $moduleExe --help | Out-Null
+        }
+        else {
+            & $MODULE_NAME --help | Out-Null
+        }
         Write-Host "SUCCESS: Wheel test passed" -ForegroundColor Green
     }
     catch {
