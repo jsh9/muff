@@ -1,78 +1,96 @@
 # Muff Release Scripts
 
-This folder contains platform-specific scripts to build wheels and standalone binaries for Muff, and optionally publish artifacts to PyPI and attach them to a GitHub Release.
+Use one machine as the main machine, usually macOS. Run the builds on the
+machines listed below, copy their outputs back to the main machine, then run the
+release and publish scripts from there.
 
-Provided scripts
-- `step-1-build-macos.sh`: Build on macOS ARM64 (Apple Silicon).
-- `step-1-build-linux.sh`: Build on Linux (x86_64 or ARM64; choose via `--arch`).
-- `step-1-build-windows.ps1`: Build on Windows x86_64 (PowerShell).
-- `step-2-create-github-release.sh`: Create/update a GitHub release and upload archives.
-- `step-3-publish-to-pypi.sh`: Publish wheels/sdists to PyPI.
+## 1. Run the step 1 builds
 
-Artifacts produced (step 1)
-- Wheels under `dist/` for package `muff`.
-- Console command installed by the wheel: `muff` (Python module remains `ruff`).
-- Standalone binary archives: `muff-<target>.tar.gz` (Linux/macOS) or `muff-<target>.zip` (Windows) plus a `.sha256` checksum. The binary inside is `muff`.
-- Location: Archives are written to `artifacts/` (configurable via `ARTIFACTS_DIR`). Wheels remain in `dist/`.
+Run these from the repository root.
 
-Prerequisites
-- Python (via Anaconda):
-  - Create/activate an environment (Python 3.10+ recommended):
-    - `conda create -n muff-release python=3.11 -y`
-    - `conda activate muff-release`
-  - Upgrade packaging tools: `python -m pip install -U pip wheel setuptools`
-  - Install `maturin` (required) and optionally `twine` (for PyPI):
-    - `pip install maturin>=1.9,<2 twine`
-- Rust toolchain:
-  - Install `rustup` and the toolchain pinned by `rust-toolchain.toml` (rustup respects this automatically).
-  - Ensure `cargo` works in your shell.
-- GitHub CLI (optional for releases):
-  - `gh auth login` (set to your Muff repo).
-- Platform-specific utilities:
-  - macOS: `shasum` (preinstalled), `tar`.
-- Linux: `sha256sum`, `tar`. For maximum compatibility (glibc 2.17), the Linux build script uses `--compatibility manylinux_2_17`.
-  - Windows: PowerShell 5+, `Compress-Archive`, `Get-FileHash` (built-in). Optionally `Set-ExecutionPolicy Bypass` to run the script.
+1. macOS Apple Silicon:
 
-Environment variables (optional)
-- `PACKAGE_NAME` (default: `muff`)
-- `MODULE_NAME` (default: `ruff`)
-- `BINARY_NAME` (default: `ruff`)
-- `ARCHIVE_PREFIX` (default: `ruff`)
+    ```sh
+    release_scripts/step-1-build-macos.sh --sdist
+    ```
 
-Flags
-- Step 1 (build scripts):
-  - macOS: `--sdist` (also build sdist; use once per release)
-  - Linux: `--arch x86_64|aarch64`, `--sdist`
-- Step 2 (GitHub release):
-  - `--tag vX.Y.Z` (required)
-  - `--assets <file ...>` (optional; defaults to `ruff-*.tar.gz`, `ruff-*.zip` and their `.sha256`)
-- Step 3 (PyPI):
-  - `--path dist` (directory to upload from)
-  - `--include-sdist` (include sdists in upload)
+1. Linux x86_64, on an x86_64 Linux machine:
 
-Recommended flow
-1) Build artifacts on each platform
-   - macOS ARM64:
-     - `chmod +x release_scripts/step-1-build-macos.sh`
-     - `release_scripts/step-1-build-macos.sh --sdist`
-   - Linux x86_64 (on x86_64 Ubuntu):
-     - `chmod +x release_scripts/step-1-build-linux.sh`
-     - `release_scripts/step-1-build-linux.sh --arch x86_64 --sdist`
-   - Linux ARM64 (on ARM Ubuntu):
-     - `release_scripts/step-1-build-linux.sh --arch aarch64`
-   - Windows x86_64:
-     - `powershell -ExecutionPolicy Bypass -File release_scripts/step-1-build-windows.ps1`
+    ```sh
+    release_scripts/step-1-build-linux.sh
+    ```
 
-2) Create/Update GitHub release (on macOS)
-   - `chmod +x release_scripts/step-2-create-github-release.sh`
-   - `release_scripts/step-2-create-github-release.sh --tag v0.12.12-muff1`
+1. Linux ARM64, on an aarch64 Linux machine:
 
-3) Publish to PyPI (on macOS)
-   - `chmod +x release_scripts/step-3-publish-to-pypi.sh`
-   - `release_scripts/step-3-publish-to-pypi.sh --path dist --include-sdist`
+    ```sh
+    release_scripts/step-1-build-linux.sh
+    ```
 
-Notes
-- The build scripts call `python scripts/transform_readme.py --target pypi` to prepare the PyPI README.
-- Only one platform needs to build the sdist; use `--sdist` once.
-- Manylinux compatibility is set to glibc 2.17 using `--compatibility manylinux_2_17`. Do not combine with `--manylinux` (maturin expects only one policy).
-- Ensure you’re logged into GitHub (`gh auth login`) and PyPI (`twine` or `maturin` configured) before steps 2 and 3.
+1. Windows x86_64, in PowerShell:
+
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File release_scripts/step-1-build-windows.ps1
+    ```
+
+## 2. Collect the outputs
+
+After each step 1 script finishes, look in these two folders on that build
+machine:
+
+- `dist/`: Python package files for PyPI.
+- `artifacts/`: standalone binary archives and their checksums.
+
+Copy these files back to the main machine where you will run steps 2 and 3:
+
+| Build machine  | Copy from the build machine                              | Put on the main machine |
+| -------------- | -------------------------------------------------------- | ----------------------- |
+| macOS          | `dist/*.whl`                                             | `dist/`                 |
+| macOS          | `dist/muff-*.tar.gz`                                     | `dist/`                 |
+| macOS          | `artifacts/muff-aarch64-apple-darwin.tar.gz`             | `artifacts/`            |
+| macOS          | `artifacts/muff-aarch64-apple-darwin.tar.gz.sha256`      | `artifacts/`            |
+| Linux x86_64   | `dist/*.whl`                                             | `dist/`                 |
+| Linux x86_64   | `artifacts/muff-x86_64-unknown-linux-gnu.tar.gz`         | `artifacts/`            |
+| Linux x86_64   | `artifacts/muff-x86_64-unknown-linux-gnu.tar.gz.sha256`  | `artifacts/`            |
+| Linux ARM64    | `dist/*.whl`                                             | `dist/`                 |
+| Linux ARM64    | `artifacts/muff-aarch64-unknown-linux-gnu.tar.gz`        | `artifacts/`            |
+| Linux ARM64    | `artifacts/muff-aarch64-unknown-linux-gnu.tar.gz.sha256` | `artifacts/`            |
+| Windows x86_64 | `dist/*.whl`                                             | `dist/`                 |
+| Windows x86_64 | `artifacts/muff-x86_64-pc-windows-*.tar.gz`              | `artifacts/`            |
+| Windows x86_64 | `artifacts/muff-x86_64-pc-windows-*.tar.gz.sha256`       | `artifacts/`            |
+
+Only one source distribution is needed. The macOS command in step 1 creates
+`dist/muff-*.tar.gz`; if another machine also creates the same file, leave that
+duplicate behind.
+
+The Windows script may create one or two binary archives, depending on the
+available toolchains. Copy every matching
+`artifacts/muff-x86_64-pc-windows-*.tar.gz` file and every matching `.sha256`
+file.
+
+Do not copy `target/`. The standalone binaries to publish are already packaged
+inside the `artifacts/*.tar.gz` files.
+
+Before continuing, the main machine should have:
+
+- `dist/*.whl` from macOS, Linux x86_64, Linux ARM64, and Windows.
+- one `dist/muff-*.tar.gz` source distribution.
+- `artifacts/muff-*.tar.gz` for every standalone binary.
+- `artifacts/muff-*.tar.gz.sha256` for every standalone binary.
+
+## 3. Run the remaining scripts
+
+Create the GitHub release from the main machine:
+
+```sh
+release_scripts/step-2-create-github-release.sh vX.Y.Z
+```
+
+Publish to PyPI from the main machine:
+
+```sh
+PYPI_API_TOKEN=<token> release_scripts/step-3-publish-to-pypi.sh
+```
+
+Step 2 uploads `artifacts/muff-*.tar.gz`,
+`artifacts/muff-*.tar.gz.sha256`, `dist/*.whl`, and `dist/*.tar.gz`.
+Step 3 publishes everything in `dist/`.
