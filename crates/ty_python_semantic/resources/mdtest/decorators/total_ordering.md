@@ -38,6 +38,35 @@ reveal_type(s1 > s2)  # revealed: bool
 reveal_type(s1 >= s2)  # revealed: bool
 ```
 
+## Stacked with class-preserving decorator
+
+Metadata from `@total_ordering` still applies above an explicitly typed class-preserving decorator:
+
+```py
+from functools import total_ordering
+from typing import TypeVar
+
+T = TypeVar("T", bound=object)
+
+def identity(cls: type[T]) -> type[T]:
+    return cls
+
+@total_ordering
+@identity
+class OrderedIdentity:
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, OrderedIdentity)
+
+    def __lt__(self, other: "OrderedIdentity") -> bool:
+        return True
+
+left = OrderedIdentity()
+right = OrderedIdentity()
+
+reveal_type(left <= right)  # revealed: bool
+reveal_type(left >= right)  # revealed: bool
+```
+
 ## Signature derived from source ordering method
 
 When the source ordering method accepts a broader type (like `object`) for its `other` parameter,
@@ -503,4 +532,95 @@ class HasOrderingMethod:
 # No error (class defines `__lt__`).
 ValidOrderedClass = total_ordering(HasOrderingMethod)
 reveal_type(ValidOrderedClass)  # revealed: type[HasOrderingMethod]
+```
+
+## Function call form with `type()`
+
+When `total_ordering` is called on a class created with `type()`, the same validation is performed:
+
+```py
+from functools import total_ordering
+
+def lt_impl(self, other) -> bool:
+    return True
+
+# No error: the functional class defines `__lt__` in its namespace
+ValidFunctional = total_ordering(type("ValidFunctional", (), {"__lt__": lt_impl}))
+
+InvalidFunctionalBase = type("InvalidFunctionalBase", (), {})
+# error: [invalid-total-ordering]
+InvalidFunctional = total_ordering(InvalidFunctionalBase)
+```
+
+## Inherited from functional class
+
+When a class inherits from a functional class that defines an ordering method, `@total_ordering`
+correctly detects it:
+
+```py
+from functools import total_ordering
+
+def lt_impl(self, other) -> bool:
+    return True
+
+def eq_impl(self, other) -> bool:
+    return True
+
+# Functional class with __lt__ method
+OrderedBase = type("OrderedBase", (), {"__lt__": lt_impl})
+
+# A class inheriting from OrderedBase gets the ordering method
+@total_ordering
+class Ordered(OrderedBase):
+    def __eq__(self, other: object) -> bool:
+        return True
+
+o1 = Ordered()
+o2 = Ordered()
+
+# Inherited __lt__ is available
+reveal_type(o1 < o2)  # revealed: bool
+
+# @total_ordering synthesizes the other methods
+reveal_type(o1 <= o2)  # revealed: bool
+reveal_type(o1 > o2)  # revealed: bool
+reveal_type(o1 >= o2)  # revealed: bool
+```
+
+When the dynamic base class does not define any ordering method, `@total_ordering` emits an error:
+
+```py
+from functools import total_ordering
+
+# Dynamic class without ordering methods (invalid for @total_ordering)
+NoOrderBase = type("NoOrderBase", (), {})
+
+@total_ordering  # error: [invalid-total-ordering]
+class NoOrder(NoOrderBase):
+    def __eq__(self, other: object) -> bool:
+        return True
+```
+
+## Dynamic namespace
+
+When a `type()`-constructed class has a dynamic namespace, we assume it might provide an ordering
+method (since we can't know what's in the namespace). No error is emitted when such a class is
+passed to `@total_ordering`:
+
+```py
+from functools import total_ordering
+from typing import Any
+
+def f(ns: dict[str, Any]):
+    # Dynamic class with dynamic namespace - might have ordering methods
+    DynamicBase = type("DynamicBase", (), ns)
+
+    # No error: the dynamic namespace might contain __lt__ or another ordering method
+    @total_ordering
+    class Ordered(DynamicBase):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    # Also works when calling total_ordering as a function
+    OrderedDirect = total_ordering(type("OrderedDirect", (), ns))
 ```

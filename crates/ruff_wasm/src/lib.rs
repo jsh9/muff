@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use js_sys::Error;
+use ruff_db::diagnostic;
+use ruff_linter::preview::is_human_readable_names_enabled;
 use ruff_linter::settings::types::PythonVersion;
 use ruff_linter::suppression::Suppressions;
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,9 @@ const TYPES: &'static str = r#"
 export interface Diagnostic {
     code: string | null;
     message: string;
+    tags: DiagnosticTag[];
+    annotations: DiagnosticAnnotation[];
+    subDiagnostics: SubDiagnostic[];
     start_location: {
         row: number;
         column: number;
@@ -54,15 +59,115 @@ export interface Diagnostic {
         }[];
     } | null;
 }
+
+export type DiagnosticTag = "unnecessary" | "deprecated";
+
+export interface DiagnosticAnnotation {
+    primary: boolean;
+    message: string | null;
+    location: DiagnosticLocation | null;
+}
+
+export interface SubDiagnostic {
+    severity: SubDiagnosticSeverity;
+    message: string;
+    location: DiagnosticLocation | null;
+}
+
+export enum SubDiagnosticSeverity {
+    Help = "help",
+    Info = "info",
+    Warning = "warning",
+    Error = "error",
+    Fatal = "fatal",
+}
+
+export interface DiagnosticLocation {
+    path: string;
+    start_location: {
+        row: number;
+        column: number;
+    };
+    end_location: {
+        row: number;
+        column: number;
+    };
+}
 "#;
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
 pub struct ExpandedMessage {
     pub code: String,
     pub message: String,
+    pub tags: Vec<ExpandedDiagnosticTag>,
+    pub annotations: Vec<ExpandedDiagnosticAnnotation>,
+    #[serde(rename = "subDiagnostics")]
+    pub sub_diagnostics: Vec<ExpandedSubDiagnostic>,
     pub start_location: Location,
     pub end_location: Location,
     pub fix: Option<ExpandedFix>,
+}
+
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
+pub struct ExpandedDiagnosticAnnotation {
+    pub primary: bool,
+    pub message: Option<String>,
+    pub location: Option<ExpandedDiagnosticLocation>,
+}
+
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
+pub struct ExpandedSubDiagnostic {
+    pub severity: SubDiagnosticSeverity,
+    pub message: String,
+    pub location: Option<ExpandedDiagnosticLocation>,
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum SubDiagnosticSeverity {
+    Help,
+    Info,
+    Warning,
+    Error,
+    Fatal,
+}
+
+impl From<diagnostic::SubDiagnosticSeverity> for SubDiagnosticSeverity {
+    fn from(value: diagnostic::SubDiagnosticSeverity) -> Self {
+        match value {
+            diagnostic::SubDiagnosticSeverity::Help => Self::Help,
+            diagnostic::SubDiagnosticSeverity::Info => Self::Info,
+            diagnostic::SubDiagnosticSeverity::Warning => Self::Warning,
+            diagnostic::SubDiagnosticSeverity::Error => Self::Error,
+            diagnostic::SubDiagnosticSeverity::Fatal => Self::Fatal,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
+pub struct ExpandedDiagnosticLocation {
+    pub path: String,
+    pub start_location: Location,
+    pub end_location: Location,
+}
+
+fn expanded_diagnostic_location(
+    span: &diagnostic::Span,
+    position_encoding: SourcePositionEncoding,
+) -> Option<ExpandedDiagnosticLocation> {
+    let source_file = span.as_ruff_file()?;
+    let source_code = source_file.to_source_code();
+    let range = span.range()?;
+
+    Some(ExpandedDiagnosticLocation {
+        path: source_file.name().to_string(),
+        start_location: source_code
+            .source_location(range.start(), position_encoding)
+            .into(),
+        end_location: source_code
+            .source_location(range.end(), position_encoding)
+            .into(),
+    })
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
@@ -76,6 +181,22 @@ struct ExpandedEdit {
     location: Location,
     end_location: Location,
     content: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpandedDiagnosticTag {
+    Unnecessary,
+    Deprecated,
+}
+
+impl From<&diagnostic::DiagnosticTag> for ExpandedDiagnosticTag {
+    fn from(value: &diagnostic::DiagnosticTag) -> Self {
+        match value {
+            diagnostic::DiagnosticTag::Unnecessary => Self::Unnecessary,
+            diagnostic::DiagnosticTag::Deprecated => Self::Deprecated,
+        }
+    }
 }
 
 /// Perform global constructor initialization.
@@ -99,8 +220,6 @@ pub fn before_main() {}
 
 #[wasm_bindgen(start)]
 pub fn run() {
-    use log::Level;
-
     before_main();
 
     // When the `console_error_panic_hook` feature is enabled, we can call the
@@ -111,8 +230,38 @@ pub fn run() {
     // https://github.com/rustwasm/console_error_panic_hook#readme
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
+}
 
-    console_log::init_with_level(Level::Debug).expect("Initializing logger went wrong.");
+/// Initializes the logger with the given log level.
+///
+/// ## Panics
+/// If this function is called more than once.
+#[wasm_bindgen(js_name = "initLogging")]
+pub fn init_logging(level: LogLevel) {
+    console_log::init_with_level(level.into())
+        .expect("`initLogging` to only be called at most once.");
+}
+
+#[derive(Copy, Clone, Debug)]
+#[wasm_bindgen]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<LogLevel> for log::Level {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Trace => log::Level::Trace,
+            LogLevel::Debug => log::Level::Debug,
+            LogLevel::Info => log::Level::Info,
+            LogLevel::Warn => log::Level::Warn,
+            LogLevel::Error => log::Level::Error,
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -184,7 +333,10 @@ impl Workspace {
         let source_type = PySourceType::default();
 
         // TODO(dhruvmanila): Support Jupyter Notebooks
-        let source_kind = SourceKind::Python(contents.to_string());
+        let source_kind = SourceKind::Python {
+            code: contents.to_string(),
+            is_stub: source_type.is_stub(),
+        };
 
         // Use the unresolved version because we don't have a file path.
         let target_version = self.settings.linter.unresolved_target_version;
@@ -213,8 +365,12 @@ impl Workspace {
             &indexer,
         );
 
-        let suppressions =
-            Suppressions::from_tokens(&self.settings.linter, locator.contents(), parsed.tokens());
+        let suppressions = Suppressions::from_tokens(
+            locator.contents(),
+            parsed.tokens(),
+            &indexer,
+            &self.settings.linter,
+        );
 
         // Generate checks.
         let diagnostics = check_path(
@@ -239,9 +395,49 @@ impl Workspace {
             .into_iter()
             .map(|msg| {
                 let range = msg.range().unwrap_or_default();
+                let annotations = msg
+                    .annotations()
+                    .iter()
+                    .map(|annotation| ExpandedDiagnosticAnnotation {
+                        primary: annotation.is_primary(),
+                        message: annotation.get_message().map(ToOwned::to_owned),
+                        location: expanded_diagnostic_location(
+                            annotation.get_span(),
+                            self.position_encoding,
+                        ),
+                    })
+                    .collect();
+                let sub_diagnostics = msg
+                    .sub_diagnostics()
+                    .iter()
+                    .map(|sub_diagnostic| ExpandedSubDiagnostic {
+                        severity: sub_diagnostic.severity().into(),
+                        message: sub_diagnostic.concise_message().to_string(),
+                        location: sub_diagnostic.primary_span_ref().and_then(|span| {
+                            expanded_diagnostic_location(span, self.position_encoding)
+                        }),
+                    })
+                    .collect();
+
+                let code = if !is_human_readable_names_enabled(self.settings.linter.preview)
+                    && let Some(code) = msg.secondary_code()
+                {
+                    code.as_str()
+                } else {
+                    msg.id().as_str()
+                };
+
                 ExpandedMessage {
-                    code: msg.secondary_code_or_id().to_string(),
+                    code: code.to_string(),
                     message: msg.concise_message().to_string(),
+                    tags: msg
+                        .primary_tags()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(ExpandedDiagnosticTag::from)
+                        .collect(),
+                    annotations,
+                    sub_diagnostics,
                     start_location: source_code
                         .source_location(range.start(), self.position_encoding)
                         .into(),
@@ -268,7 +464,9 @@ impl Workspace {
             })
             .collect();
 
-        serde_wasm_bindgen::to_value(&messages).map_err(into_error)
+        messages
+            .serialize(&serde_wasm_bindgen::Serializer::new().serialize_missing_as_null(true))
+            .map_err(into_error)
     }
 
     pub fn format(&self, contents: &str) -> Result<String, Error> {

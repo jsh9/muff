@@ -27,6 +27,7 @@ use std::path::Path;
 use itertools::Itertools;
 use log::debug;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticTag, IntoDiagnosticMessage, Span};
 use ruff_diagnostics::{Applicability, Fix, IsolationLevel};
@@ -46,7 +47,8 @@ use ruff_python_ast::{PySourceType, helpers, str, visitor};
 use ruff_python_codegen::{Generator, Stylist};
 use ruff_python_index::Indexer;
 use ruff_python_parser::semantic_errors::{
-    SemanticSyntaxChecker, SemanticSyntaxContext, SemanticSyntaxError, SemanticSyntaxErrorKind,
+    LazyImportContext, SemanticSyntaxChecker, SemanticSyntaxContext, SemanticSyntaxError,
+    SemanticSyntaxErrorKind,
 };
 use ruff_python_parser::typing::{AnnotationKind, ParsedAnnotation, parse_type_annotation};
 use ruff_python_parser::{ParseError, Parsed};
@@ -67,7 +69,9 @@ use crate::docstrings::extraction::ExtractionTarget;
 use crate::importer::{ImportRequest, Importer, ResolutionError};
 use crate::noqa::NoqaMapping;
 use crate::package::PackageRoot;
-use crate::preview::is_undefined_export_in_dunder_init_enabled;
+use crate::preview::{
+    is_incorrect_dict_iterator_comprehension_enabled, is_undefined_export_in_dunder_init_enabled,
+};
 use crate::registry::Rule;
 use crate::rules::flake8_bugbear::rules::ReturnInGenerator;
 use crate::rules::pyflakes::rules::{
@@ -328,6 +332,29 @@ impl<'a> Checker<'a> {
         Generator::new(self.stylist.indentation(), self.stylist.line_ending())
     }
 
+    pub(crate) fn lazy_import_context(&self) -> Option<LazyImportContext> {
+        match self.semantic.current_scope().kind {
+            // Possible, but invalid positions.
+            ScopeKind::Function(_) => return Some(LazyImportContext::Function),
+            ScopeKind::Class(_) => return Some(LazyImportContext::Class),
+            // Valid position.
+            ScopeKind::Module => {}
+            // Impossible positions because lambdas and comprehensions can't contain statements.
+            ScopeKind::Lambda(_)
+            | ScopeKind::Generator { .. }
+            | ScopeKind::Type
+            | ScopeKind::DunderClassCell => {}
+        }
+
+        for statement in self.semantic.current_statements().skip(1) {
+            if matches!(statement, Stmt::Try(_)) {
+                return Some(LazyImportContext::TryExceptBlocks);
+            }
+        }
+
+        None
+    }
+
     /// Return the preferred quote for a generated `StringLiteral` node, given where we are in the
     /// AST.
     fn preferred_quote(&self) -> Quote {
@@ -419,6 +446,18 @@ impl<'a> Checker<'a> {
         range: TextRange,
     ) -> Option<DiagnosticGuard<'chk, 'a>> {
         self.context.report_diagnostic_if_enabled(kind, range)
+    }
+
+    /// Return a [`DiagnosticGuard`] for reporting a diagnostic, with its fix title deferred.
+    ///
+    /// Prefer [`Checker::report_diagnostic`] unless you need to attach sub-diagnostics before the
+    /// fix title. See its documentation for more details.
+    pub(crate) fn report_custom_diagnostic<'chk, T: Violation>(
+        &'chk self,
+        kind: T,
+        range: TextRange,
+    ) -> DiagnosticGuard<'chk, 'a> {
+        self.context.report_custom_diagnostic(kind, range)
     }
 
     /// Adds a [`TextRange`] to the set of ranges of variable names
@@ -750,9 +789,15 @@ impl SemanticSyntaxContext for Checker<'_> {
                     self.report_diagnostic(ReturnInGenerator, error.range);
                 }
             }
-            SemanticSyntaxErrorKind::ReboundComprehensionVariable
+            SemanticSyntaxErrorKind::NamedExpressionInComprehensionIterable
+            | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
+            | SemanticSyntaxErrorKind::ReboundComprehensionVariable
+            | SemanticSyntaxErrorKind::LazyImportNotAllowed { .. }
+            | SemanticSyntaxErrorKind::LazyImportStar
+            | SemanticSyntaxErrorKind::LazyFutureImport
             | SemanticSyntaxErrorKind::DuplicateTypeParameter
             | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
+            | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
             | SemanticSyntaxErrorKind::IrrefutableCasePattern(_)
             | SemanticSyntaxErrorKind::SingleStarredAssignment
             | SemanticSyntaxErrorKind::WriteToDebug(_)
@@ -783,18 +828,12 @@ impl SemanticSyntaxContext for Checker<'_> {
         self.semantic.future_annotations_or_stub()
     }
 
+    fn lazy_import_context(&self) -> Option<LazyImportContext> {
+        self.lazy_import_context()
+    }
+
     fn in_async_context(&self) -> bool {
-        for scope in self.semantic.current_scopes() {
-            match scope.kind {
-                ScopeKind::Class(_) | ScopeKind::Lambda(_) => return false,
-                ScopeKind::Function(ast::StmtFunctionDef { is_async, .. }) => return *is_async,
-                ScopeKind::Generator { .. }
-                | ScopeKind::Module
-                | ScopeKind::Type
-                | ScopeKind::DunderClassCell => {}
-            }
-        }
-        false
+        self.semantic.in_async_context()
     }
 
     fn in_await_allowed_context(&self) -> bool {
@@ -842,6 +881,21 @@ impl SemanticSyntaxContext for Checker<'_> {
         false
     }
 
+    fn in_class_body_comprehension(&self) -> bool {
+        for scope in self.semantic.current_scopes() {
+            match scope.kind {
+                ScopeKind::Generator { .. } => {}
+                ScopeKind::Class(_) => return true,
+                ScopeKind::Function(_)
+                | ScopeKind::Lambda(_)
+                | ScopeKind::Module
+                | ScopeKind::Type
+                | ScopeKind::DunderClassCell => return false,
+            }
+        }
+        false
+    }
+
     fn in_module_scope(&self) -> bool {
         self.semantic.current_scope().kind.is_module()
     }
@@ -876,10 +930,10 @@ impl SemanticSyntaxContext for Checker<'_> {
         for parent in self.semantic.current_statements().skip(1) {
             match parent {
                 Stmt::For(ast::StmtFor { orelse, .. })
-                | Stmt::While(ast::StmtWhile { orelse, .. }) => {
-                    if !orelse.contains(child) {
-                        return true;
-                    }
+                | Stmt::While(ast::StmtWhile { orelse, .. })
+                    if !orelse.contains(child) =>
+                {
+                    return true;
                 }
                 Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {
                     break;
@@ -937,11 +991,17 @@ impl<'a> Visitor<'a> for Checker<'a> {
             {
                 self.semantic.flags |= SemanticModelFlags::MODULE_DOCSTRING_BOUNDARY;
             }
-            Stmt::ImportFrom(ast::StmtImportFrom { module, names, .. }) => {
+            Stmt::ImportFrom(ast::StmtImportFrom {
+                module,
+                names,
+                is_lazy,
+                ..
+            }) => {
                 self.semantic.flags |= SemanticModelFlags::MODULE_DOCSTRING_BOUNDARY;
 
-                // Allow __future__ imports until we see a non-__future__ import.
-                if let Some("__future__") = module.as_deref() {
+                // Allow eager `__future__` imports until we see any other import. Lazy imports,
+                // including `lazy from __future__ import ...`, don't enable future annotations.
+                if !*is_lazy && matches!(module.as_deref(), Some("__future__")) {
                     if names
                         .iter()
                         .any(|alias| alias.name.as_str() == "annotations")
@@ -997,6 +1057,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
             }
             Stmt::Import(ast::StmtImport {
                 names,
+                is_lazy: _,
                 range: _,
                 node_index: _,
             }) => {
@@ -1052,6 +1113,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 names,
                 module,
                 level,
+                is_lazy,
                 range: _,
                 node_index: _,
             }) => {
@@ -1061,6 +1123,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
 
                 let module = module.as_deref();
                 let level = *level;
+                let is_lazy = *is_lazy;
 
                 // Mark the top-level module as "seen" by the semantic model.
                 if level == 0 {
@@ -1070,7 +1133,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 }
 
                 for alias in names {
-                    if let Some("__future__") = module {
+                    if !is_lazy && matches!(module, Some("__future__")) {
                         let name = alias.asname.as_ref().unwrap_or(&alias.name);
                         self.add_binding(
                             name,
@@ -1119,58 +1182,54 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 names,
                 range: _,
                 node_index: _,
-            }) => {
-                if !self.semantic.scope_id.is_global() {
-                    for name in names {
-                        let binding_id = self.semantic.global_scope().get(name);
+            }) if !self.semantic.scope_id.is_global() => {
+                for name in names {
+                    let binding_id = self.semantic.global_scope().get(name);
 
-                        // Mark the binding in the global scope as "rebound" in the current scope.
-                        if let Some(binding_id) = binding_id {
-                            self.semantic
-                                .add_rebinding_scope(binding_id, self.semantic.scope_id);
-                        }
-
-                        // Add a binding to the current scope.
-                        let binding_id = self.semantic.push_binding(
-                            name.range(),
-                            BindingKind::Global(binding_id),
-                            BindingFlags::GLOBAL,
-                        );
-                        let scope = self.semantic.current_scope_mut();
-                        scope.add(name, binding_id);
+                    // Mark the binding in the global scope as "rebound" in the current scope.
+                    if let Some(binding_id) = binding_id {
+                        self.semantic
+                            .add_rebinding_scope(binding_id, self.semantic.scope_id);
                     }
+
+                    // Add a binding to the current scope.
+                    let binding_id = self.semantic.push_binding(
+                        name.range(),
+                        BindingKind::Global(binding_id),
+                        BindingFlags::GLOBAL,
+                    );
+                    let scope = self.semantic.current_scope_mut();
+                    scope.add(name, binding_id);
                 }
             }
             Stmt::Nonlocal(ast::StmtNonlocal {
                 names,
                 range: _,
                 node_index: _,
-            }) => {
-                if !self.semantic.scope_id.is_global() {
-                    for name in names {
-                        if let Some((scope_id, binding_id)) = self.semantic.nonlocal(name) {
-                            // Mark the binding as "used", since the `nonlocal` requires an existing
-                            // binding.
-                            self.semantic.add_local_reference(
-                                binding_id,
-                                ExprContext::Load,
-                                name.range(),
-                            );
+            }) if !self.semantic.scope_id.is_global() => {
+                for name in names {
+                    if let Some((scope_id, binding_id)) = self.semantic.nonlocal(name) {
+                        // Mark the binding as "used", since the `nonlocal` requires an existing
+                        // binding.
+                        self.semantic.add_local_reference(
+                            binding_id,
+                            ExprContext::Load,
+                            name.range(),
+                        );
 
-                            // Mark the binding in the enclosing scope as "rebound" in the current
-                            // scope.
-                            self.semantic
-                                .add_rebinding_scope(binding_id, self.semantic.scope_id);
+                        // Mark the binding in the enclosing scope as "rebound" in the current
+                        // scope.
+                        self.semantic
+                            .add_rebinding_scope(binding_id, self.semantic.scope_id);
 
-                            // Add a binding to the current scope.
-                            let binding_id = self.semantic.push_binding(
-                                name.range(),
-                                BindingKind::Nonlocal(binding_id, scope_id),
-                                BindingFlags::NONLOCAL,
-                            );
-                            let scope = self.semantic.current_scope_mut();
-                            scope.add(name, binding_id);
-                        }
+                        // Add a binding to the current scope.
+                        let binding_id = self.semantic.push_binding(
+                            name.range(),
+                            BindingKind::Nonlocal(binding_id, scope_id),
+                            BindingFlags::NONLOCAL,
+                        );
+                        let scope = self.semantic.current_scope_mut();
+                        scope.add(name, binding_id);
                     }
                 }
             }
@@ -1416,7 +1475,10 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 }
 
                 self.semantic.set_branch(branch);
+                let flags_snapshot = self.semantic.flags;
+                self.semantic.flags |= SemanticModelFlags::ORELSE;
                 self.visit_body(orelse);
+                self.semantic.flags = flags_snapshot;
                 self.semantic.pop_branch();
 
                 self.semantic.push_branch();
@@ -1512,7 +1574,27 @@ impl<'a> Visitor<'a> for Checker<'a> {
             }) => {
                 self.visit_boolean_test(test);
                 self.visit_body(body);
+                let flags_snapshot = self.semantic.flags;
+                self.semantic.flags |= SemanticModelFlags::ORELSE;
                 self.visit_body(orelse);
+                self.semantic.flags = flags_snapshot;
+            }
+            Stmt::For(ast::StmtFor {
+                node_index: _,
+                range: _,
+                is_async: _,
+                target,
+                iter,
+                body,
+                orelse,
+            }) => {
+                self.visit_expr(iter);
+                self.visit_expr(target);
+                self.visit_body(body);
+                let flags_snapshot = self.semantic.flags;
+                self.semantic.flags |= SemanticModelFlags::ORELSE;
+                self.visit_body(orelse);
+                self.semantic.flags = flags_snapshot;
             }
             Stmt::If(
                 stmt_if @ ast::StmtIf {
@@ -1553,11 +1635,9 @@ impl<'a> Visitor<'a> for Checker<'a> {
                             DocstringState::Expected(ExpectedDocstringKind::Attribute);
                     }
                 }
-                Stmt::AnnAssign(ast::StmtAnnAssign { target, .. }) => {
-                    if target.is_name_expr() {
-                        self.docstring_state =
-                            DocstringState::Expected(ExpectedDocstringKind::Attribute);
-                    }
+                Stmt::AnnAssign(ast::StmtAnnAssign { target, .. }) if target.is_name_expr() => {
+                    self.docstring_state =
+                        DocstringState::Expected(ExpectedDocstringKind::Attribute);
                 }
                 _ => {}
             }
@@ -1707,7 +1787,9 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 node_index: _,
             }) => {
                 self.visit_generators(GeneratorKind::DictComprehension, generators);
-                self.visit_expr(key);
+                if let Some(key) = key {
+                    self.visit_expr(key);
+                }
                 self.visit_expr(value);
             }
             Expr::Lambda(
@@ -1741,7 +1823,10 @@ impl<'a> Visitor<'a> for Checker<'a> {
             }) => {
                 self.visit_boolean_test(test);
                 self.visit_expr(body);
+                let flags_snapshot = self.semantic.flags;
+                self.semantic.flags |= SemanticModelFlags::ORELSE;
                 self.visit_expr(orelse);
+                self.semantic.flags = flags_snapshot;
             }
             Expr::UnaryOp(ast::ExprUnaryOp {
                 op: UnaryOp::Not,
@@ -1824,7 +1909,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         }
                     }
                     Some(typing::Callable::Cast) => {
-                        for (i, arg) in arguments.arguments_source_order().enumerate() {
+                        for (i, arg) in arguments.iter_source_order().enumerate() {
                             match (i, arg) {
                                 (0, ArgOrKeyword::Arg(arg)) => self.visit_cast_type_argument(arg),
                                 (_, ArgOrKeyword::Arg(arg)) => self.visit_non_type_definition(arg),
@@ -1841,7 +1926,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         }
                     }
                     Some(typing::Callable::NewType) => {
-                        for (i, arg) in arguments.arguments_source_order().enumerate() {
+                        for (i, arg) in arguments.iter_source_order().enumerate() {
                             match (i, arg) {
                                 (1, ArgOrKeyword::Arg(arg)) => self.visit_type_definition(arg),
                                 (_, ArgOrKeyword::Arg(arg)) => self.visit_non_type_definition(arg),
@@ -1886,7 +1971,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                     }
                     Some(typing::Callable::TypeAliasType) => {
                         // Ex) TypeAliasType("Json", "Union[dict[str, Json]]", type_params=())
-                        for (i, arg) in arguments.arguments_source_order().enumerate() {
+                        for (i, arg) in arguments.iter_source_order().enumerate() {
                             match (i, arg) {
                                 (1, ArgOrKeyword::Arg(arg)) => self.visit_type_definition(arg),
                                 (_, ArgOrKeyword::Arg(arg)) => self.visit_non_type_definition(arg),
@@ -2287,6 +2372,9 @@ impl<'a> Visitor<'a> for Checker<'a> {
 
         // Step 2: Traversal
         walk_pattern(self, pattern);
+
+        // Step 4: Analysis
+        analyze::pattern(pattern, self);
     }
 
     fn visit_body(&mut self, body: &'a [Stmt]) {
@@ -2461,6 +2549,12 @@ impl<'a> Checker<'a> {
         // Step 4: Analysis
         for generator in generators {
             analyze::comprehension(generator, self);
+        }
+
+        if self.is_rule_enabled(Rule::IncorrectDictIterator)
+            && is_incorrect_dict_iterator_comprehension_enabled(self.settings())
+        {
+            self.analyze.comprehensions.push(self.semantic.snapshot());
         }
     }
 
@@ -2698,16 +2792,15 @@ impl<'a> Checker<'a> {
 
         match parent {
             Stmt::TypeAlias(_) => flags.insert(BindingFlags::DEFERRED_TYPE_ALIAS),
-            Stmt::AnnAssign(ast::StmtAnnAssign { annotation, .. }) => {
+            Stmt::AnnAssign(ast::StmtAnnAssign { annotation, .. })
                 // TODO: It is a bit unfortunate that we do this check twice
                 //       maybe we should change how we visit this statement
                 //       so the semantic flag for the type alias sticks around
                 //       until after we've handled this store, so we can check
                 //       the flag instead of duplicating this check
-                if self.semantic.match_typing_expr(annotation, "TypeAlias") {
+                if self.semantic.match_typing_expr(annotation, "TypeAlias") => {
                     flags.insert(BindingFlags::ANNOTATED_TYPE_ALIAS);
                 }
-            }
             _ => {}
         }
 
@@ -2812,7 +2905,10 @@ impl<'a> Checker<'a> {
 
         self.semantic.resolve_del(id, expr.range());
 
-        if helpers::on_conditional_branch(&mut self.semantic.current_statements()) {
+        if helpers::on_conditional_branch(&mut self.semantic.current_statements())
+            || self.semantic.in_exception_handler()
+            || self.semantic.in_orelse()
+        {
             return;
         }
 
@@ -3306,9 +3402,11 @@ pub(crate) fn check_ast(
     // Check docstrings, bindings, and unresolved references.
     analyze::deferred_lambdas(&mut checker);
     analyze::deferred_for_loops(&mut checker);
+    analyze::deferred_comprehensions(&mut checker);
     analyze::definitions(&mut checker);
     analyze::bindings(&checker);
     analyze::unresolved_references(&checker);
+    analyze::deferred_with_statements(&mut checker);
 
     // Reset the scope to module-level, and check all consumed scopes.
     checker.semantic.scope_id = ScopeId::global();
@@ -3367,6 +3465,7 @@ impl<'a> LintContext<'a> {
             context: self,
             diagnostic: Some(kind.into_diagnostic(range, &self.source_file)),
             rule: T::rule(),
+            before_drop_fns: SmallVec::new(),
         }
     }
 
@@ -3386,10 +3485,61 @@ impl<'a> LintContext<'a> {
                 context: self,
                 diagnostic: Some(kind.into_diagnostic(range, &self.source_file)),
                 rule,
+                before_drop_fns: SmallVec::new(),
             })
         } else {
             None
         }
+    }
+
+    /// Return a [`DiagnosticGuard`] for reporting a diagnostic, with its fix title deferred.
+    ///
+    /// Prefer [`LintContext::report_diagnostic`] unless you need to attach sub-diagnostics before
+    /// the fix title. See its documentation for more details.
+    #[expect(clippy::needless_pass_by_value)]
+    pub(crate) fn report_custom_diagnostic<'chk, T: Violation>(
+        &'chk self,
+        kind: T,
+        range: TextRange,
+    ) -> DiagnosticGuard<'chk, 'a> {
+        let diagnostic = crate::message::create_lint_diagnostic(
+            kind.message(),
+            Option::<&'static str>::None,
+            range,
+            None,
+            None,
+            self.source_file.clone(),
+            None,
+            T::rule(),
+        );
+
+        let mut guard = DiagnosticGuard {
+            context: self,
+            diagnostic: Some(diagnostic),
+            rule: T::rule(),
+            before_drop_fns: SmallVec::new(),
+        };
+
+        if let Some(fix_title) = kind.fix_title() {
+            guard.before_drop(move |diag| diag.help(&fix_title));
+        }
+
+        guard
+    }
+
+    /// Return a [`DiagnosticGuard`] for reporting a diagnostic, with its fix title deferred, if the
+    /// corresponding rule is enabled.
+    ///
+    /// Prefer [`LintContext::report_diagnostic_if_enabled`] unless you need to attach
+    /// sub-diagnostics before the fix title. See its documentation for more details.
+    #[expect(unused)]
+    pub(crate) fn report_custom_diagnostic_if_enabled<'chk, T: Violation>(
+        &'chk self,
+        kind: T,
+        range: TextRange,
+    ) -> Option<DiagnosticGuard<'chk, 'a>> {
+        self.is_rule_enabled(T::rule())
+            .then(|| self.report_custom_diagnostic(kind, range))
     }
 
     #[inline]
@@ -3433,6 +3583,8 @@ impl<'a> LintContext<'a> {
     }
 }
 
+type BeforeDropFn = Box<dyn Fn(&mut Diagnostic)>;
+
 /// An abstraction for mutating a diagnostic.
 ///
 /// Callers can build this guard by starting with `Checker::report_diagnostic`.
@@ -3447,6 +3599,8 @@ pub(crate) struct DiagnosticGuard<'a, 'b> {
     ///
     /// This is always `Some` until the `Drop` (or `defuse`) call.
     diagnostic: Option<Diagnostic>,
+    /// Functions to call before dropping the guard and storing the diagnostic.
+    before_drop_fns: SmallVec<[BeforeDropFn; 1]>,
     rule: Rule,
 }
 
@@ -3508,6 +3662,27 @@ impl DiagnosticGuard<'_, '_> {
         let ann = self.primary_annotation_mut().unwrap();
         ann.push_tag(tag);
     }
+
+    /// Register a function to call before dropping the guard.
+    ///
+    /// This is intended for use with the [`Checker::report_custom_diagnostic`]
+    /// or [`LintContext::report_custom_diagnostic`] methods in cases where a
+    /// fix title should be added as a `help` diagnostic after all other
+    /// sub-diagnostics. `report_custom_diagnostic` uses this method to defer
+    /// adding the fix title, but you can defer additional diagnostics if you
+    /// want them to appear after the fix title. For example:
+    ///
+    /// ```ignore
+    /// let mut diagnostic = checker.report_custom_diagnostic(MyViolation, range);
+    /// diagnostic.info("This will appear first");
+    /// diagnostic.before_drop(|diag| diag.info("This will appear last, after the fix title"));
+    /// ```
+    pub(crate) fn before_drop<F>(&mut self, f: F)
+    where
+        F: Fn(&mut Diagnostic) + 'static,
+    {
+        self.before_drop_fns.push(Box::new(f));
+    }
 }
 
 impl DiagnosticGuard<'_, '_> {
@@ -3563,7 +3738,19 @@ impl DiagnosticGuard<'_, '_> {
         range: impl Ranged,
     ) {
         let span = Span::from(self.context.source_file.clone()).with_range(range.range());
+        let message = message.into_diagnostic_message();
+        debug_assert!(
+            !message.as_str().is_empty(),
+            "use `secondary_annotation_without_message` for annotations without a message"
+        );
         let ann = Annotation::secondary(span).message(message);
+        self.diagnostic.as_mut().unwrap().annotate(ann);
+    }
+
+    /// Add a secondary annotation without a message at the given range.
+    pub(crate) fn secondary_annotation_without_message(&mut self, range: impl Ranged) {
+        let span = Span::from(self.context.source_file.clone()).with_range(range.range());
+        let ann = Annotation::secondary(span);
         self.diagnostic.as_mut().unwrap().annotate(ann);
     }
 }
@@ -3592,7 +3779,10 @@ impl Drop for DiagnosticGuard<'_, '_> {
             return;
         }
 
-        if let Some(diagnostic) = self.diagnostic.take() {
+        if let Some(mut diagnostic) = self.diagnostic.take() {
+            for f in &self.before_drop_fns {
+                f(&mut diagnostic);
+            }
             self.context.diagnostics.borrow_mut().push(diagnostic);
         }
     }

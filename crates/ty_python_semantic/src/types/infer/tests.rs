@@ -2,14 +2,14 @@ use super::builder::TypeInferenceBuilder;
 use crate::db::tests::{TestDb, setup_db};
 use crate::place::symbol;
 use crate::place::{ConsideredDefinitions, Place, global_symbol};
-use crate::semantic_index::definition::Definition;
-use crate::semantic_index::scope::FileScopeId;
-use crate::semantic_index::{global_scope, place_table, semantic_index, use_def_map};
 use crate::types::{KnownClass, KnownInstanceType, check_types};
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::system::DbWithWritableSystem as _;
 use ruff_db::testing::{assert_function_query_was_not_run, assert_function_query_was_run};
+use ty_python_core::definition::Definition;
+use ty_python_core::scope::FileScopeId;
+use ty_python_core::{global_scope, place_table, semantic_index, use_def_map};
 
 use super::*;
 
@@ -53,6 +53,49 @@ fn assert_file_diagnostics(db: &TestDb, filename: &str, expected: &[&str]) {
     let diagnostics = check_types(db, file);
 
     assert_diagnostic_messages(&diagnostics, expected);
+}
+
+#[test]
+fn compact_definition_types_omit_owner() -> anyhow::Result<()> {
+    assert!(
+        std::mem::size_of::<DefinitionTypes>()
+            <= std::mem::size_of::<TypeAndQualifiers>() + std::mem::size_of::<usize>()
+    );
+
+    let mut db = setup_db();
+    db.write_dedented(
+        "/src/definitions.py",
+        r#"
+        first = 1
+        second = 2
+        "#,
+    )?;
+
+    let file = system_path_to_file(&db, "/src/definitions.py").unwrap();
+    let module = parsed_module(&db, file).load(&db);
+    let first_assignment = module.syntax().body[0].as_assign_stmt().unwrap();
+    let second_assignment = module.syntax().body[1].as_assign_stmt().unwrap();
+    let first = semantic_index(&db, file)
+        .expect_single_definition(first_assignment.targets[0].as_name_expr().unwrap());
+    let second = semantic_index(&db, file)
+        .expect_single_definition(second_assignment.targets[0].as_name_expr().unwrap());
+
+    let owner_type = Type::unknown();
+    let owner = DefinitionTypes::from_parts(first, vec![(first, owner_type)], vec![]);
+    assert!(matches!(owner, DefinitionTypes::Binding(ty) if ty == owner_type));
+    assert_eq!(
+        owner.bindings(first).collect::<Vec<_>>(),
+        [(first, owner_type)]
+    );
+
+    let non_owner = DefinitionTypes::from_parts(first, vec![(second, owner_type)], vec![]);
+    assert!(matches!(non_owner, DefinitionTypes::Other(_)));
+    assert_eq!(
+        non_owner.bindings(first).collect::<Vec<_>>(),
+        [(second, owner_type)]
+    );
+
+    Ok(())
 }
 
 #[test]

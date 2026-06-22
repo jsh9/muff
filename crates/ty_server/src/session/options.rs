@@ -1,15 +1,18 @@
 use std::collections::HashMap;
 
-use lsp_types::Url;
-use ruff_db::system::{SystemPath, SystemPathBuf};
+use lsp_types::Uri;
+use ruff_db::system::{System, SystemPath, SystemPathBuf};
 use ruff_macros::Combine;
 use ruff_python_ast::PythonVersion;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use strum::IntoEnumIterator;
 use ty_combine::Combine;
 use ty_ide::{CompletionSettings, InlayHintSettings};
+use ty_project::CheckMode;
 use ty_project::metadata::Options as TyOptions;
 use ty_project::metadata::options::ProjectOptionsOverrides;
+use ty_project::metadata::python_version::SupportedPythonVersion;
 use ty_project::metadata::value::{RangedValue, RelativePathBuf, ValueSource};
 
 use super::settings::{ExperimentalSettings, GlobalSettings, WorkspaceSettings};
@@ -125,6 +128,15 @@ impl ClientOptions {
     }
 
     #[must_use]
+    pub fn with_complete_function_parentheses(mut self, enabled: bool) -> Self {
+        self.workspace
+            .completions
+            .get_or_insert_default()
+            .complete_function_parentheses = Some(enabled);
+        self
+    }
+
+    #[must_use]
     pub fn with_show_syntax_errors(mut self, show_syntax_errors: bool) -> Self {
         self.global.show_syntax_errors = Some(show_syntax_errors);
         self
@@ -145,16 +157,16 @@ impl ClientOptions {
 #[serde(rename_all = "camelCase")]
 pub struct GlobalOptions {
     /// Diagnostic mode for the language server.
-    diagnostic_mode: Option<DiagnosticMode>,
+    pub diagnostic_mode: Option<DiagnosticMode>,
 
     /// Experimental features that the server provides on an opt-in basis.
-    pub(crate) experimental: Option<Experimental>,
+    pub experimental: Option<Experimental>,
 
     /// If `true` or [`None`], show syntax errors as diagnostics.
     ///
     /// This is useful when using ty with other language servers, allowing the user to refer
     /// to syntax errors from only one source.
-    pub(crate) show_syntax_errors: Option<bool>,
+    pub show_syntax_errors: Option<bool>,
 }
 
 impl GlobalOptions {
@@ -200,19 +212,32 @@ pub struct WorkspaceOptions {
 }
 
 impl WorkspaceOptions {
-    pub(crate) fn into_settings(self, root: &SystemPath, client: &Client) -> WorkspaceSettings {
-        let configuration_file =
-            self.configuration_file
-                .and_then(|config_file| match shellexpand::full(&config_file) {
-                    Ok(path) => Some(SystemPath::absolute(&*path, root)),
-                    Err(error) => {
-                        client.show_error_message(format_args!(
-                            "Failed to expand the environment variables \
-                            for the `ty.configuration_file` setting: {error}"
-                        ));
-                        None
-                    }
-                });
+    pub(crate) fn into_settings(
+        self,
+        root: &SystemPath,
+        client: &Client,
+        system: &dyn System,
+    ) -> WorkspaceSettings {
+        let configuration_file = self.configuration_file.and_then(|config_file| {
+            match shellexpand::full_with_context(
+                &config_file,
+                || system.env_var("HOME").ok(),
+                |var| match system.env_var(var) {
+                    Ok(val) => Ok(Some(val)),
+                    Err(std::env::VarError::NotPresent) => Ok(None),
+                    Err(e) => Err(e),
+                },
+            ) {
+                Ok(path) => Some(SystemPath::absolute(&*path, root)),
+                Err(error) => {
+                    client.show_error_message(format_args!(
+                        "Failed to expand the environment variables \
+                                for the `ty.configuration_file` setting: {error}"
+                    ));
+                    None
+                }
+            }
+        });
 
         let options_overrides =
             self.configuration.and_then(|map| {
@@ -236,25 +261,15 @@ impl WorkspaceOptions {
         if let Some(extension) = self.python_extension
             && let Some(active_environment) = extension.active_environment
         {
-            overrides.fallback_python = if let Some(environment) = &active_environment.environment {
-                environment.folder_uri.to_file_path().ok().and_then(|path| {
-                    Some(RelativePathBuf::python_extension(
-                        SystemPathBuf::from_path_buf(path).ok()?,
-                    ))
-                })
-            } else {
-                Some(RelativePathBuf::python_extension(
-                    active_environment.executable.sys_prefix.clone(),
-                ))
-            };
+            overrides.fallback_python = Some(RelativePathBuf::python_extension(
+                active_environment.executable.sys_prefix,
+            ));
 
-            overrides.fallback_python_version =
-                active_environment.version.as_ref().and_then(|version| {
-                    Some(RangedValue::python_extension(PythonVersion::from((
-                        u8::try_from(version.major).ok()?,
-                        u8::try_from(version.minor).ok()?,
-                    ))))
-                });
+            overrides.fallback_python_version = active_environment
+                .version
+                .as_ref()
+                .and_then(resolve_editor_python_version)
+                .map(RangedValue::python_extension);
 
             if let Some(python) = &overrides.fallback_python {
                 tracing::debug!(
@@ -293,6 +308,33 @@ impl WorkspaceOptions {
     }
 }
 
+/// Resolve the selected editor Python version, if ty supports it.
+fn resolve_editor_python_version(version: &EnvironmentVersion) -> Option<SupportedPythonVersion> {
+    let warn_unsupported_editor_python_version = || {
+        tracing::warn!(
+            "Unsupported Python version `{}.{}` selected in your editor; ty won't set \
+            the Python version to the selected interpreter's version. Expected one of {}.",
+            version.major,
+            version.minor,
+            SupportedPythonVersion::iter()
+                .map(|version| format!("`{version}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    };
+
+    let python_version = u8::try_from(version.major)
+        .and_then(|major| {
+            u8::try_from(version.minor).map(|minor| PythonVersion::from((major, minor)))
+        })
+        .inspect_err(|_| warn_unsupported_editor_python_version())
+        .ok()?;
+
+    SupportedPythonVersion::try_from(python_version)
+        .inspect_err(|_| warn_unsupported_editor_python_version())
+        .ok()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct ConfigurationMap(Map<String, Value>);
@@ -327,6 +369,8 @@ impl InlayHintOptions {
 #[serde(rename_all = "camelCase")]
 pub struct CompletionOptions {
     auto_import: Option<bool>,
+    /// Whether callable completions should insert parentheses.
+    complete_function_parentheses: Option<bool>,
 }
 
 impl CompletionOptions {
@@ -339,6 +383,7 @@ impl CompletionOptions {
     fn into_settings(self) -> CompletionSettings {
         CompletionSettings {
             auto_import: self.auto_import.unwrap_or(true),
+            complete_function_parentheses: self.complete_function_parentheses.unwrap_or(false),
         }
     }
 }
@@ -369,6 +414,17 @@ impl DiagnosticMode {
         matches!(self, DiagnosticMode::OpenFilesOnly)
     }
 
+    /// Returns this diagnostic mode as a check mode.
+    ///
+    /// This returns `None` when diagnostics are disabled.
+    pub(crate) const fn to_check_mode(self) -> Option<CheckMode> {
+        match self {
+            DiagnosticMode::Off => None,
+            DiagnosticMode::OpenFilesOnly => Some(CheckMode::OpenFiles),
+            DiagnosticMode::Workspace => Some(CheckMode::AllFiles),
+        }
+    }
+
     pub(crate) const fn is_off(self) -> bool {
         matches!(self, DiagnosticMode::Off)
     }
@@ -396,7 +452,7 @@ impl Combine for DiagnosticMode {
     clippy::empty_structs_with_brackets,
     reason = "The LSP fails to deserialize the options when this is a unit type"
 )]
-pub(crate) struct Experimental {}
+pub struct Experimental {}
 
 impl Experimental {
     #[expect(clippy::unused_self)]
@@ -424,6 +480,7 @@ impl Combine for PythonExtension {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActiveEnvironment {
     pub(crate) executable: PythonExecutable,
+    #[deprecated]
     pub(crate) environment: Option<PythonEnvironment>,
     pub(crate) version: Option<EnvironmentVersion>,
 }
@@ -433,27 +490,32 @@ pub(crate) struct ActiveEnvironment {
 pub(crate) struct EnvironmentVersion {
     pub(crate) major: i64,
     pub(crate) minor: i64,
-    #[allow(dead_code)]
-    pub(crate) patch: i64,
-    #[allow(dead_code)]
-    pub(crate) sys_version: String,
+    #[deprecated(
+        note = "Not provided by all clients (Zed, VS Code when using the Python Environment extension). Use `major` and `minor` instead."
+    )]
+    pub(crate) patch: Option<i64>,
+    #[deprecated(
+        note = "Not provided by all clients (Zed, VS Code when using the Python Environment extension)."
+    )]
+    pub(crate) sys_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PythonEnvironment {
-    pub(crate) folder_uri: Url,
-    #[allow(dead_code)]
+    #[deprecated]
+    pub(crate) folder_uri: Option<Uri>,
+    #[deprecated]
     #[serde(rename = "type")]
-    pub(crate) kind: String,
-    #[allow(dead_code)]
+    pub(crate) kind: Option<String>,
+    #[deprecated]
     pub(crate) name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PythonExecutable {
-    #[allow(dead_code)]
-    pub(crate) uri: Url,
+    #[deprecated]
+    pub(crate) uri: Option<Uri>,
     pub(crate) sys_prefix: SystemPathBuf,
 }

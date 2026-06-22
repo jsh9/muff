@@ -46,3 +46,69 @@ reveal_type(product.id)  # revealed: int
 reveal_type(product.name)  # revealed: str
 reveal_type(product.internal_price_cent)  # revealed: int
 ```
+
+## Inherited `ModelMetaclass`
+
+Pydantic's metaclass-based `@dataclass_transform` metadata should continue to apply when a custom
+metaclass inherits from `ModelMetaclass`.
+
+```py
+from pydantic import BaseModel
+from pydantic._internal._model_construction import ModelMetaclass
+
+class RegistryMeta(ModelMetaclass): ...
+
+class User(BaseModel, metaclass=RegistryMeta):
+    name: str
+    age: int = 0
+
+reveal_type(User.__init__)  # revealed: (self: User, *, name: str, age: int = 0) -> None
+
+User(name="alice")
+User(name="alice", age=1)
+
+# error: [missing-argument]
+User()
+
+# error: [unknown-argument]
+User(name="alice", extra=1)
+```
+
+## Validator and serializer decorators with explicit `@classmethod`
+
+Pydantic [recommends](https://docs.pydantic.dev/latest/concepts/validators/#class-validators) using
+an explicit `@classmethod` decorator below `@field_validator` / `@model_validator(mode="before")` /
+`@field_serializer` to get proper type checking. The first parameter should be inferred as
+`type[Self]`. ty does not support recognizing these functions as *implicit* class methods, so the
+`@classmethod` decorator is required for correct type inference.
+
+```py
+from pydantic import BaseModel, field_validator, model_validator, field_serializer
+
+class User(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        reveal_type(cls)  # revealed: type[Self@validate_name]
+        return v.strip()
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_model_before(cls, values: dict[str, object]) -> dict[str, object]:
+        reveal_type(cls)  # revealed: type[Self@validate_model_before]
+        return values
+
+    @field_serializer("name")
+    @classmethod
+    def serialize_name(cls, v: str) -> str:
+        reveal_type(cls)  # revealed: type[Self@serialize_name]
+        return v.upper()
+
+    # No @classmethod for "after" validators: the first parameter should be inferred as "Self"
+    @model_validator(mode="after")
+    def validate_model_after(self) -> "User":
+        reveal_type(self)  # revealed: Self@validate_model_after
+        return self
+```

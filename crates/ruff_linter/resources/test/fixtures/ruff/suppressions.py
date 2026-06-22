@@ -41,8 +41,8 @@ def f():
 
 
 def f():
-    # Neither of these are ignored and warnings are
-    # logged to user
+    # Neither of these are ignored and warnings are logged to user.
+    # An usued suppression diagnostic should also be logged.
     # ruff: disable[E501]
     I = 1
     # ruff: enable[E501]
@@ -57,7 +57,7 @@ def f():
 
 
 def f():
-    # TODO: Duplicate codes should be counted as duplicate, not unused
+    # Duplicate codes that are actually used.
     # ruff: disable[F841, F841]
     foo = 0
 
@@ -109,3 +109,69 @@ def f():
     # ruff: disable
     # ruff: disable[]
     print("hello")
+
+
+def f():
+    # Should only cover the first statement, leaving a single diagnostic for bar
+    # ruff: ignore[F841]
+    foo = 0
+    bar = 0
+
+
+def f():
+    # Should only cover the first statement, leaving a single diagnostic for bar
+    foo = 0  # ruff: ignore[F841]
+    bar = 0
+
+
+def f():
+    # Should only cover the multiline statement, leaving a single diagnostic for bar
+    foo = """
+        value
+    """  # ruff: ignore[F841]
+    bar = 0
+
+
+# ruff: ignore[ARG001]  should cover the entire def
+def f(
+    foo,
+    bar,
+):
+    print("hello")
+
+
+def f(
+    # ruff: ignore[ARG001]  should only cover the first argument
+    foo,
+    bar,
+):
+    print("hello")
+
+
+def f(
+    foo,  # ruff: ignore[ARG001]  should only cover the first argument
+    bar,
+):
+    print("hello")
+
+
+def f(
+    foo,
+    bar,
+):  # ruff: ignore[ARG001]  should cover nothing and be marked as unused
+    pass
+
+
+class Foo:
+    # ruff: ignore[ARG002]  should be unused due to file-ignore below
+    def bar(self, arg1, arg2):
+        print("hello")
+
+# ruff: file-ignore[ARG002]  should cover the class method above!
+
+
+# Ensure LAST suppression in file is reported.
+# https://github.com/astral-sh/ruff/issues/23235
+# ruff:disable[F401]
+print("goodbye")
+# ruff:enable[F401]

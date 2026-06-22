@@ -33,6 +33,77 @@ def _(target: int):
     reveal_type(y)
 ```
 
+## With sequence wildcard
+
+```py
+from collections.abc import Sequence
+
+def sequence_star_pattern_is_exhaustive(paths: list[int]) -> None:
+    match paths:
+        case [*_paths]:
+            raise ValueError
+
+    reveal_type(paths)  # revealed: Never
+
+def sequence_star_pattern_is_not_exhaustive_for_text(paths: Sequence[str]) -> None:
+    match paths:
+        case [*_paths]:
+            raise ValueError
+
+    # `str`, `bytes`, and `bytearray` are subtypes of `Sequence`, but sequence
+    # patterns explicitly do not match them.
+    # TODO: After https://github.com/astral-sh/ty/issues/3314 is fixed, the
+    # `Sequence[str] & bytes` and `Sequence[str] & bytearray` intersections
+    # should simplify to `Never`.
+    reveal_type(paths)  # revealed: str | (Sequence[str] & bytes) | (Sequence[str] & bytearray)
+
+def sequence_prefix_star_pattern_is_not_catch_all(paths: Sequence[str]) -> None:
+    match paths:
+        case []:
+            raise ValueError
+        case [_first]:
+            raise ValueError
+        case [_first, _second, *_paths]:
+            raise ValueError
+
+    # Exact sequence alternatives and the definitely matched tuple subset of the
+    # starred alternative remain as negative constraints.
+    # revealed: (Sequence[str] & ~<Protocol with members '__len__'> & ~<Protocol with members '__getitem__', '__len__'> & ~tuple[object, object, *tuple[object, ...]]) | str | (Sequence[str] & bytes) | (Sequence[str] & bytearray)
+    reveal_type(paths)
+
+def normalize_version(
+    version: str | tuple[int, int] | tuple[int, int, int],
+) -> str:
+    match version:
+        case [major, minor, *_rest]:
+            return f"{major}.{minor}"
+
+    reveal_type(version)  # revealed: str
+    return version.strip()
+
+def exact_sequence_pattern_is_exhaustive(value: tuple[int, str]) -> int:
+    match value:
+        case int(), str():
+            return 1
+
+def refutable_exact_sequence_pattern_is_not_exhaustive(value: tuple[int]) -> int:  # error: [invalid-return-type]
+    match value:
+        case [int(real=0)]:
+            return 1
+
+def guarded_exact_sequence_pattern_is_not_exhaustive(value: tuple[int, str], flag: bool) -> int:  # error: [invalid-return-type]
+    match value:
+        case [int(), str()] if flag:
+            return 1
+
+def guarded_then_unguarded_exact_sequence_patterns_are_exhaustive(value: tuple[int, str], flag: bool) -> int:
+    match value:
+        case [int(), str()] if flag:
+            return 1
+        case [int(), str()]:
+            return 2
+```
+
 ## Basic match
 
 ```py
@@ -136,6 +207,90 @@ def _(target: FooSub | str):
             y = 4
 
     reveal_type(y)  # revealed: Literal[1, 3, 4]
+```
+
+### Dynamic class
+
+A dynamically typed class pattern is not known to match every subject, so later cases remain
+reachable.
+
+```py
+from typing import Any
+
+DynamicClass: Any = int
+
+def _(target: int | str):
+    match target:
+        case DynamicClass():
+            reveal_type(target)  # revealed: (int & Any) | (str & Any)
+            y = 1
+        case _:
+            reveal_type(target)  # revealed: (int & Any) | (str & Any)
+            y = 2
+
+    reveal_type(y)  # revealed: Literal[1, 2]
+```
+
+### Subclass-of type
+
+A class pattern whose class expression has type `type[Base]` is not guaranteed to match a `Base`
+subject. `PatternClass` can evaluate to any subclass of `Base`, and a `Base` instance need not be an
+instance of that subclass. The `PatternClass` arm must therefore not be considered guaranteed to
+match, and the fallback arm remains reachable.
+
+```py
+class Base: ...
+class Derived(Base): ...
+
+PatternClass: type[Base] = Derived
+
+def _(target: Base):
+    match target:
+        case PatternClass():
+            reveal_type(target)  # revealed: Base
+            y = 1
+        case _:
+            reveal_type(target)  # revealed: Base
+            y = 2
+
+    reveal_type(y)  # revealed: Literal[1, 2]
+```
+
+### `collections.abc.Callable`
+
+```py
+from collections import abc
+
+def _(subj: abc.Callable[..., str]) -> None:
+    y = 1
+
+    match subj:
+        case abc.Callable():
+            y = 2
+        case _:
+            y = 3
+
+    reveal_type(y)  # revealed: Literal[2]
+
+def _(subj: None) -> None:
+    y = 1
+
+    match subj:
+        case abc.Callable():
+            y = 2
+
+    reveal_type(y)  # revealed: Literal[1]
+
+def _(subj: int | abc.Callable[..., str]) -> None:
+    y = 1
+
+    match subj:
+        case abc.Callable():
+            y = 2
+        case _:
+            y = 3
+
+    reveal_type(y)  # revealed: Literal[2, 3]
 ```
 
 ### With arguments
@@ -292,6 +447,38 @@ def _(answer: Answer):
     reveal_type(y)  # revealed: Literal[1, 2]
 ```
 
+## Matching on enum value patterns in invalid code
+
+This is a regression test for <https://github.com/astral-sh/ty/issues/3481>.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```py
+from enum import Enum
+from typing import TypeVar
+
+def f(x: T): ...
+def g(x: T): ...
+
+f()  # error: [missing-argument] "No argument provided for required parameter `x`"
+g()  # error: [missing-argument]
+
+class C(Enum):
+    a = 1
+    b = 2
+
+match m:  # error: [unresolved-reference] "Name `m` used when not defined"
+    case C.a:
+        _()  # error: [unresolved-reference] "Name `_` used when not defined"
+    case _:
+        _()  # error: [unresolved-reference]
+
+T = TypeVar
+```
+
 ## Or match
 
 A `|` pattern matches if any of the subpatterns match.
@@ -434,4 +621,77 @@ def _(answer: Answer | None):
     # New assignments after the match should not be `Never`
     x = Foo()
     reveal_type(x)  # revealed: Foo
+```
+
+## Invalid class patterns
+
+For class patterns, the runtime first checks that the match pattern is an instance of `type`, and
+then uses `isinstance` to check the match.
+
+If the match pattern is not an instance of `type`, we raise a diagnostic:
+
+```py
+from typing import Any
+from ty_extensions import Intersection
+
+def _(val, Valid1: type | Any, Valid2: Intersection[type, Any], Valid3: type[Any], Valid4: type[int]):
+    Invalid1 = "foo"
+
+    match val:
+        # error: [invalid-match-pattern] "`Literal["foo"]` cannot be used in a class pattern because it is not a type"
+        case Invalid1(): ...
+
+    Invalid2 = int | str
+
+    match val:
+        # error: [invalid-match-pattern] "`<types.UnionType special-form 'int | str'>` cannot be used in a class pattern because it is not a type"
+        case Invalid2():
+            pass
+        case Valid1():  # fine
+            pass
+        case Valid2():  # fine
+            pass
+        case Valid3():  # fine
+            pass
+        case Valid4():  # fine
+            pass
+```
+
+We also raise a diagnostic if the class cannot be used with `isinstance`:
+
+```py
+from typing import Any, TypedDict
+
+def _(val):
+    Invalid3 = Any
+
+    match val:
+        # TODO: this should be an `invalid-match-pattern` error
+        case Invalid3(): ...
+
+    class Invalid4(TypedDict): ...
+
+    match val:
+        # TODO: this could have the `invalid-match-pattern` error code instead.
+        # error: [isinstance-against-typed-dict] "`TypedDict` class `Invalid4` cannot be used in a class pattern"
+        case Invalid4(): ...
+```
+
+We do not raise a diagnostic for dynamic types:
+
+```py
+def _(val, UnknownSymbol):
+    reveal_type(UnknownSymbol)  # revealed: Unknown
+
+    match val:
+        case UnknownSymbol(): ...
+```
+
+We also do not raise a diagnostic if the match pattern is a non-statically known instance of `type`:
+
+```py
+def _(val, IntOrStr: type[int | str]):
+    match val:
+        case IntOrStr():
+            print(f"Matched as {IntOrStr}: {val!r}")
 ```

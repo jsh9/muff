@@ -14,8 +14,8 @@ def _(
     b: TypeIs[str | int],
     c: TypeGuard[bool],
     d: TypeIs[tuple[TypeOf[bytes]]],
-    e: TypeGuard,  # error: [invalid-type-form]
-    f: TypeIs,  # error: [invalid-type-form]
+    e: TypeGuard,  # error: [invalid-type-form] "`typing.TypeGuard` requires exactly one argument when used in a parameter annotation"
+    f: TypeIs,  # error: [invalid-type-form] "`typing.TypeIs` requires exactly one argument when used in a parameter annotation"
 ):
     reveal_type(a)  # revealed: TypeGuard[str]
     reveal_type(b)  # revealed: TypeIs[str | int]
@@ -24,10 +24,10 @@ def _(
     reveal_type(e)  # revealed: Unknown
     reveal_type(f)  # revealed: Unknown
 
-# error: [invalid-return-type] "Function always implicitly returns `None`, which is not assignable to return type `TypeGuard[str]`"
+# error: [empty-body] "Function always implicitly returns `None`, which is not assignable to return type `TypeGuard[str]`"
 def _(a) -> TypeGuard[str]: ...
 
-# error: [invalid-return-type] "Function always implicitly returns `None`, which is not assignable to return type `TypeIs[str]`"
+# error: [empty-body] "Function always implicitly returns `None`, which is not assignable to return type `TypeIs[str]`"
 def _(a) -> TypeIs[str]: ...
 def f(a) -> TypeGuard[str]:
     return True
@@ -46,12 +46,23 @@ A user-defined type guard must accept at least one positional argument (in addit
 for non-static methods).
 
 ```pyi
+from typing import Any, TypeVar
 from typing_extensions import TypeGuard, TypeIs
 
-# TODO: error: [invalid-type-guard-definition]
+T = TypeVar("T")
+
+# Multiple parameters are allowed
+def is_str_list(val: list[object], allow_empty: bool) -> TypeGuard[list[str]]: ...
+def is_set_of(val: set[Any], type: type[T]) -> TypeGuard[set[T]]: ...
+def is_two_element_tuple(val: tuple[object, ...], a: str, b: str) -> TypeIs[tuple[str, str]]: ...
+
+# error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
 def _() -> TypeGuard[str]: ...
 
-# TODO: error: [invalid-type-guard-definition]
+# error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
+def _(*args) -> TypeGuard[str]: ...
+
+# error: [invalid-type-guard-definition] "`TypeIs` function must have a parameter to narrow"
 def _(**kwargs) -> TypeIs[str]: ...
 
 class _:
@@ -63,14 +74,17 @@ class _:
     def _(a) -> TypeIs[str]: ...
 
     # errors
-    def _(self) -> TypeGuard[str]: ...  # TODO: error: [invalid-type-guard-definition]
-    def _(self, /, *, a) -> TypeGuard[str]: ...  # TODO: error: [invalid-type-guard-definition]
+    # error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
+    def _(self) -> TypeGuard[str]: ...
+    # error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
+    def _(self, /, *, a) -> TypeGuard[str]: ...
     @classmethod
-    def _(cls) -> TypeIs[str]: ...  # TODO: error: [invalid-type-guard-definition]
+    def _(cls) -> TypeIs[str]: ...  # error: [invalid-type-guard-definition] "`TypeIs` function must have a parameter to narrow"
     @classmethod
-    def _() -> TypeIs[str]: ...  # TODO: error: [invalid-type-guard-definition]
+    def _() -> TypeIs[str]: ...  # error: [invalid-type-guard-definition] "`TypeIs` function must have a parameter to narrow"
     @staticmethod
-    def _(*, a) -> TypeGuard[str]: ...  # TODO: error: [invalid-type-guard-definition]
+    # error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
+    def _(*, a) -> TypeGuard[str]: ...
 ```
 
 For `TypeIs` functions, the narrowed type must be assignable to the declared type of that parameter,
@@ -86,10 +100,10 @@ def _(a: tuple[object]) -> TypeIs[tuple[str]]: ...
 def _(a: str | Any) -> TypeIs[str]: ...
 def _(a) -> TypeIs[str]: ...
 
-# TODO: error: [invalid-type-guard-definition]
+# error: [invalid-type-guard-definition] "Narrowed type `str` is not assignable to the declared parameter type `int`"
 def _(a: int) -> TypeIs[str]: ...
 
-# TODO: error: [invalid-type-guard-definition]
+# error: [invalid-type-guard-definition] "Narrowed type `int` is not assignable to the declared parameter type `bool | str`"
 def _(a: bool | str) -> TypeIs[int]: ...
 ```
 
@@ -107,20 +121,21 @@ class C:
     @classmethod
     def g(cls, x: object) -> TypeGuard[int]:
         return True
-    # TODO: this could error at definition time
-    def h(self) -> TypeGuard[str]:
+
+    def h(
+        self,
+    ) -> TypeGuard[str]:  # error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
         return True
-    # TODO: this could error at definition time
+
     @classmethod
-    def j(cls) -> TypeGuard[int]:
+    def j(cls) -> TypeGuard[int]:  # error: [invalid-type-guard-definition] "`TypeGuard` function must have a parameter to narrow"
         return True
 
 def _(x: object):
     if C().f(x):
         reveal_type(x)  # revealed: str
     if C.f(C(), x):
-        # TODO: should be str
-        reveal_type(x)  # revealed: object
+        reveal_type(x)  # revealed: str
     if C.g(x):
         reveal_type(x)  # revealed: int
     if C().g(x):
@@ -152,6 +167,9 @@ def _(x: object):
     if A().is_int(x):
         reveal_type(x)  # revealed: int
 
+    if A.is_int(A(), x):
+        reveal_type(x)  # revealed: int
+
     if A().is_int2(x):
         reveal_type(x)  # revealed: int
 
@@ -172,7 +190,6 @@ a = 123
 def f(_) -> TypeGuard[int, str]: ...
 
 # error: [invalid-type-form] "Special form `typing.TypeIs` expected exactly one type parameter"
-# error: [invalid-type-form] "Variable of type `Literal[123]` is not allowed in a type expression"
 def g(_) -> TypeIs[a, str]: ...
 
 reveal_type(f(0))  # revealed: Unknown
@@ -221,16 +238,16 @@ def g(a: object) -> TypeIs[int]:
     return True
 
 def _(d: Any):
-    if f():  # error: [missing-argument]
+    if f():  # error: [missing-argument] "No argument provided for required parameter `a` of function `f`"
         ...
 
     if g(*d):
-        ...
+        pass
 
     if f("foo"):  # TODO: error: [invalid-type-guard-call]
         ...
 
-    if g(a=d):  # error: [invalid-type-guard-call]
+    if g(a=d):  # error: [invalid-type-guard-call] "Type guard call does not have a target"
         ...
 ```
 
@@ -326,17 +343,14 @@ def _(a: Foo | Bar):
     reveal_type(c)  # revealed: TypeIs[Bar @ a]
 
     if b:
-        # TODO should be `Foo`
-        reveal_type(a)  # revealed: Foo | Bar
+        reveal_type(a)  # revealed: Foo
     else:
         reveal_type(a)  # revealed: Foo | Bar
 
     if c:
-        # TODO should be `Bar`
-        reveal_type(a)  # revealed: Foo | Bar
+        reveal_type(a)  # revealed: Bar
     else:
-        # TODO should be `Foo & ~Bar`
-        reveal_type(a)  # revealed: Foo | Bar
+        reveal_type(a)  # revealed: Foo & ~Bar
 ```
 
 Further writes to the narrowed place invalidate the narrowing:
@@ -358,12 +372,12 @@ The `TypeIs` type remains effective across generic boundaries:
 ```py
 from typing_extensions import TypeVar
 
-T = TypeVar("T")
+IdentityT = TypeVar("IdentityT")
 
 def f(v: object) -> TypeIs[Bar]:
     return True
 
-def g(v: T) -> T:
+def g(v: IdentityT) -> IdentityT:
     return v
 
 def _(a: Foo):
@@ -373,6 +387,18 @@ def _(a: Foo):
 
     if g(f(a)):
         reveal_type(a)  # revealed: Foo & Bar
+```
+
+Type guard narrowing also works when the callee has a `Callable` type:
+
+```py
+from typing import Callable
+
+def _(x: Foo | Bar, is_bar: Callable[[object], TypeIs[Bar]]):
+    if is_bar(x):
+        reveal_type(x)  # revealed: Bar
+    else:
+        reveal_type(x)  # revealed: Foo & ~Bar
 ```
 
 For generics, we transform the argument passed into `TypeIs[]` from `X` to `Top[X]`. This helps
@@ -498,4 +524,33 @@ def _(x: object):
     # TypeGuard clobbers in the first branch, giving: B | (A & C)
     if f(x) and (g(x) or h(x)):
         reveal_type(x)  # revealed: B | (A & C)
+```
+
+## Narrowing with named expressions (walrus operator)
+
+When a type guard is used with a named expression, the target of the named expression should be
+narrowed.
+
+```py
+from typing_extensions import TypeGuard, TypeIs
+
+def is_str(x: object) -> TypeIs[str]:
+    return isinstance(x, str)
+
+def guard_str(x: object) -> TypeGuard[str]:
+    return isinstance(x, str)
+
+def get_value() -> int | str:
+    return 1
+
+def f():
+    if is_str(x := get_value()):
+        reveal_type(x)  # revealed: str
+    else:
+        reveal_type(x)  # revealed: int
+
+    if guard_str(y := get_value()):
+        reveal_type(y)  # revealed: str
+    else:
+        reveal_type(y)  # revealed: int | str
 ```

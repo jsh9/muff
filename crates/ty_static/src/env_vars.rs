@@ -10,7 +10,7 @@ impl EnvVars {
     ///
     /// For example:
     ///
-    /// - `TY_LOG=uv=debug` is the equivalent of `-vv` to the command line
+    /// - `TY_LOG=ty=debug` is the equivalent of `-vv` to the command line
     /// - `TY_LOG=trace` will enable all trace-level logging.
     ///
     /// See the [tracing documentation](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#example-syntax)
@@ -27,8 +27,8 @@ impl EnvVars {
     /// Accepted values:
     ///
     /// * `short` - Display short memory report
-    /// * `mypy_primer` - Display `mypy_primer` format and suppress workspace diagnostics
     /// * `full` - Display full memory report
+    /// * `json` - Display machine-readable JSON format and suppress workspace diagnostics
     #[attr_hidden]
     pub const TY_MEMORY_REPORT: &'static str = "TY_MEMORY_REPORT";
 
@@ -46,6 +46,13 @@ impl EnvVars {
     ///
     /// Equivalent to the `--config-file` command-line argument.
     pub const TY_CONFIG_FILE: &'static str = "TY_CONFIG_FILE";
+
+    /// The format to use for printing diagnostic messages.
+    ///
+    /// When set, ty will use this format for output instead of the default.
+    ///
+    /// Accepts the same values as the `--output-format` command-line argument.
+    pub const TY_OUTPUT_FORMAT: &'static str = "TY_OUTPUT_FORMAT";
 
     /// Used to detect an activated virtual environment.
     pub const VIRTUAL_ENV: &'static str = "VIRTUAL_ENV";
@@ -65,18 +72,6 @@ impl EnvVars {
 
     /// Used to determine the root install path of Conda.
     pub const CONDA_ROOT: &'static str = "_CONDA_ROOT";
-
-    /// Filter which tests to run in mdtest.
-    ///
-    /// Only tests whose names contain this filter string will be executed.
-    #[attr_hidden]
-    pub const MDTEST_TEST_FILTER: &'static str = "MDTEST_TEST_FILTER";
-
-    /// Switch mdtest output format to GitHub Actions annotations.
-    ///
-    /// If set (to any value), mdtest will output errors in GitHub Actions format.
-    #[attr_hidden]
-    pub const MDTEST_GITHUB_ANNOTATIONS_FORMAT: &'static str = "MDTEST_GITHUB_ANNOTATIONS_FORMAT";
 
     // Externally defined environment variables
 

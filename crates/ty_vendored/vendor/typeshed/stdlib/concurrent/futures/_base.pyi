@@ -4,8 +4,8 @@ from _typeshed import Unused
 from collections.abc import Callable, Iterable, Iterator
 from logging import Logger
 from types import GenericAlias, TracebackType
-from typing import Any, Final, Generic, NamedTuple, Protocol, TypeVar, type_check_only
-from typing_extensions import ParamSpec, Self
+from typing import Any, Final, Generic, NamedTuple, ParamSpec, Protocol, TypeVar, type_check_only
+from typing_extensions import Self
 
 FIRST_COMPLETED: Final = "FIRST_COMPLETED"
 FIRST_EXCEPTION: Final = "FIRST_EXCEPTION"
@@ -167,6 +167,7 @@ class Executor:
         Returns:
             A Future representing the given call.
         """
+
     if sys.version_info >= (3, 14):
         def map(
             self,
@@ -202,6 +203,7 @@ class Executor:
                     before the given timeout.
                 Exception: If fn(*args) raises for any values.
             """
+
     else:
         def map(
             self, fn: Callable[..., _T], *iterables: Iterable[Any], timeout: float | None = None, chunksize: int = 1

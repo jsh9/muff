@@ -14,8 +14,8 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Executor
 from contextvars import Context
 from socket import AddressFamily, AddressInfo, SocketKind, _Address, _RetAddress, socket
-from typing import IO, Any, Literal, Protocol, TypeVar, overload, type_check_only
-from typing_extensions import Self, TypeAlias, TypeVarTuple, Unpack, deprecated
+from typing import IO, Any, Literal, Protocol, TypeAlias, TypeVar, overload, type_check_only
+from typing_extensions import Self, TypeVarTuple, Unpack, deprecated
 
 from . import _AwaitableLike, _CoroutineLike
 from .base_events import Server
@@ -121,6 +121,7 @@ class AbstractServer:
     @abstractmethod
     def close(self) -> None:
         """Stop serving.  This leaves existing connections open."""
+
     if sys.version_info >= (3, 13):
         @abstractmethod
         def close_clients(self) -> None:
@@ -204,6 +205,7 @@ class AbstractEventLoop:
     @abstractmethod
     async def shutdown_asyncgens(self) -> None:
         """Shutdown all active asynchronous generators."""
+
     # Methods scheduling callbacks.  All these return Handles.
     # "context" added in 3.9.10/3.10.2 for call_*
     @abstractmethod
@@ -224,7 +226,17 @@ class AbstractEventLoop:
     @abstractmethod
     def create_future(self) -> Future[Any]: ...
     # Tasks methods
-    if sys.version_info >= (3, 11):
+    if sys.version_info >= (3, 14):
+        @abstractmethod
+        def create_task(
+            self,
+            coro: _CoroutineLike[_T],
+            *,
+            name: str | None = None,
+            context: Context | None = None,
+            eager_start: bool | None = None,
+        ) -> Task[_T]: ...
+    elif sys.version_info >= (3, 11):
         @abstractmethod
         def create_task(
             self, coro: _CoroutineLike[_T], *, name: str | None = None, context: Context | None = None
@@ -258,9 +270,10 @@ class AbstractEventLoop:
         type: int = 0,
         proto: int = 0,
         flags: int = 0,
-    ) -> list[tuple[AddressFamily, SocketKind, int, str, tuple[str, int] | tuple[str, int, int, int]]]: ...
+    ) -> list[tuple[AddressFamily, SocketKind, int, str, tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]]]: ...
     @abstractmethod
     async def getnameinfo(self, sockaddr: tuple[str, int] | tuple[str, int, int, int], flags: int = 0) -> tuple[str, str]: ...
+
     if sys.version_info >= (3, 11):
         @overload
         @abstractmethod
@@ -415,7 +428,6 @@ class AbstractEventLoop:
             the user should await Server.start_serving() or Server.serve_forever()
             to make the server to start accepting connections.
             """
-
         @overload
         @abstractmethod
         async def create_server(
@@ -504,7 +516,6 @@ class AbstractEventLoop:
             the user should await Server.start_serving() or Server.serve_forever()
             to make the server to start accepting connections.
             """
-
         @overload
         @abstractmethod
         async def create_server(
@@ -587,7 +598,6 @@ class AbstractEventLoop:
             the user should await Server.start_serving() or Server.serve_forever()
             to make the server to start accepting connections.
             """
-
         @overload
         @abstractmethod
         async def create_server(
@@ -720,6 +730,7 @@ class AbstractEventLoop:
             the user should await Server.start_serving() or Server.serve_forever()
             to make the server to start accepting connections.
             """
+
     if sys.version_info >= (3, 11):
         async def connect_accepted_socket(
             self,
@@ -738,7 +749,8 @@ class AbstractEventLoop:
             This method is a coroutine.  When completed, the coroutine
             returns a (transport, protocol) pair.
             """
-    elif sys.version_info >= (3, 10):
+
+    else:
         async def connect_accepted_socket(
             self,
             protocol_factory: Callable[[], _ProtocolT],
@@ -755,6 +767,7 @@ class AbstractEventLoop:
             This method is a coroutine.  When completed, the coroutine
             returns a (transport, protocol) pair.
             """
+
     if sys.version_info >= (3, 11):
         async def create_unix_connection(
             self,
@@ -835,6 +848,7 @@ class AbstractEventLoop:
         sock can optionally be specified in order to use a preexisting
         socket object.
         """
+
     # Pipes and subprocesses.
     @abstractmethod
     async def connect_read_pipe(self, protocol_factory: Callable[[], _ProtocolT], pipe: Any) -> tuple[ReadTransport, _ProtocolT]:
@@ -975,18 +989,12 @@ else:
         @abstractmethod
         def new_event_loop(self) -> AbstractEventLoop: ...
         # Child processes handling (Unix only).
-        if sys.version_info >= (3, 12):
-            @abstractmethod
-            @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
-            def get_child_watcher(self) -> AbstractChildWatcher: ...
-            @abstractmethod
-            @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
-            def set_child_watcher(self, watcher: AbstractChildWatcher) -> None: ...
-        else:
-            @abstractmethod
-            def get_child_watcher(self) -> AbstractChildWatcher: ...
-            @abstractmethod
-            def set_child_watcher(self, watcher: AbstractChildWatcher) -> None: ...
+        @abstractmethod
+        @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
+        def get_child_watcher(self) -> AbstractChildWatcher: ...
+        @abstractmethod
+        @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
+        def set_child_watcher(self, watcher: AbstractChildWatcher) -> None: ...
 
     AbstractEventLoopPolicy = _AbstractEventLoopPolicy
 
@@ -1060,20 +1068,16 @@ if sys.version_info >= (3, 14):
         If policy is None, the default policy is restored.
         """
 
-    @deprecated("Deprecated since Python 3.14; will be removed in Python 3.16.")
-    def get_event_loop_policy() -> _AbstractEventLoopPolicy: ...
-    @deprecated("Deprecated since Python 3.14; will be removed in Python 3.16.")
-    def set_event_loop_policy(policy: _AbstractEventLoopPolicy | None) -> None: ...
+@deprecated("Deprecated since Python 3.14; will be removed in Python 3.16.")
+def get_event_loop_policy() -> _AbstractEventLoopPolicy:
+    """Get the current event loop policy."""
 
-else:
-    def get_event_loop_policy() -> _AbstractEventLoopPolicy:
-        """Get the current event loop policy."""
+@deprecated("Deprecated since Python 3.14; will be removed in Python 3.16.")
+def set_event_loop_policy(policy: _AbstractEventLoopPolicy | None) -> None:
+    """Set the current event loop policy.
 
-    def set_event_loop_policy(policy: _AbstractEventLoopPolicy | None) -> None:
-        """Set the current event loop policy.
-
-        If policy is None, the default policy is restored.
-        """
+    If policy is None, the default policy is restored.
+    """
 
 def set_event_loop(loop: AbstractEventLoop | None) -> None:
     """Equivalent to calling get_event_loop_policy().set_event_loop(loop)."""
@@ -1082,21 +1086,12 @@ def new_event_loop() -> AbstractEventLoop:
     """Equivalent to calling get_event_loop_policy().new_event_loop()."""
 
 if sys.version_info < (3, 14):
-    if sys.version_info >= (3, 12):
-        @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
-        def get_child_watcher() -> AbstractChildWatcher:
-            """Equivalent to calling get_event_loop_policy().get_child_watcher()."""
+    @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
+    def get_child_watcher() -> AbstractChildWatcher:
+        """Equivalent to calling get_event_loop_policy().get_child_watcher()."""
 
-        @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
-        def set_child_watcher(watcher: AbstractChildWatcher) -> None:
-            """Equivalent to calling
-            get_event_loop_policy().set_child_watcher(watcher).
-            """
-    else:
-        def get_child_watcher() -> AbstractChildWatcher:
-            """Equivalent to calling get_event_loop_policy().get_child_watcher()."""
-
-        def set_child_watcher(watcher: AbstractChildWatcher) -> None:
-            """Equivalent to calling
-            get_event_loop_policy().set_child_watcher(watcher).
-            """
+    @deprecated("Deprecated since Python 3.12; removed in Python 3.14.")
+    def set_child_watcher(watcher: AbstractChildWatcher) -> None:
+        """Equivalent to calling
+        get_event_loop_policy().set_child_watcher(watcher).
+        """

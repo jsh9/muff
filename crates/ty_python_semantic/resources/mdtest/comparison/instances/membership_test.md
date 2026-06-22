@@ -65,6 +65,27 @@ reveal_type(42 in A())  # revealed: bool
 reveal_type(42 not in A())  # revealed: bool
 ```
 
+## `__contains__` implemented via descriptor
+
+If `__contains__` is implemented as a descriptor (e.g., a class with `__get__` that returns a
+callable), the descriptor protocol should be properly invoked:
+
+```py
+class Target:
+    def __call__(self, item: object) -> bool:
+        return True
+
+class Descriptor:
+    def __get__(self, instance: object, owner: type) -> Target:
+        return Target()
+
+class Container:
+    __contains__: Descriptor = Descriptor()
+
+reveal_type(1 in Container())  # revealed: bool
+reveal_type("hello" not in Container())  # revealed: bool
+```
+
 ## Wrong Return Type
 
 Python coerces the results of containment checks to `bool`, even if `__contains__` returns a
@@ -176,6 +197,18 @@ def contains(y, x):
 
 where the `bool()` conversion itself implicitly calls `__bool__` under the hood.
 
+```py
+class NotBoolable:
+    __bool__: int = 3
+
+class WithContains:
+    def __contains__(self, item) -> NotBoolable:
+        return NotBoolable()
+
+# snapshot: unsupported-bool-conversion
+10 in WithContains()
+```
+
 TODO: Ideally the message would explain to the user what's wrong. E.g,
 
 ```ignore
@@ -187,18 +220,27 @@ error: [operator] cannot use `in` operator on object of type `WithContains`
 
 It may also be more appropriate to use `unsupported-operator` as the error code.
 
-<!-- snapshot-diagnostics -->
+```snapshot
+error[unsupported-bool-conversion]: Boolean conversion is not supported for type `NotBoolable`
+ --> src/mdtest_snippet.py:9:1
+  |
+9 | 10 in WithContains()
+  | ^^^^^^^^^^^^^^^^^^^^
+  |
+info: `__bool__` on `NotBoolable` must be callable
+```
 
 ```py
-class NotBoolable:
-    __bool__: int = 3
-
-class WithContains:
-    def __contains__(self, item) -> NotBoolable:
-        return NotBoolable()
-
-# error: [unsupported-bool-conversion]
-10 in WithContains()
-# error: [unsupported-bool-conversion]
+# snapshot: unsupported-bool-conversion
 10 not in WithContains()
+```
+
+```snapshot
+error[unsupported-bool-conversion]: Boolean conversion is not supported for type `NotBoolable`
+  --> src/mdtest_snippet.py:11:1
+   |
+11 | 10 not in WithContains()
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+info: `__bool__` on `NotBoolable` must be callable
 ```

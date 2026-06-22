@@ -208,6 +208,20 @@ if not isinstance(DoesNotExist, type):
 
 ## Inheritance from `type[Any]` and `type[Unknown]`
 
+Using `type[T]` for a non-dynamic `T` as a base keeps the class analyzable, even though the exact
+MRO cannot be determined:
+
+```py
+from ty_extensions import reveal_mro
+
+class Base:
+    base_attr: int = 1
+
+def f(x: type[Base]):
+    class Foo(x): ...  # error: [unsupported-base]
+    reveal_mro(Foo)  # revealed: (<class 'Foo'>, Unknown, <class 'object'>)
+```
+
 Inheritance from `type[Any]` and `type[Unknown]` is also permitted, in keeping with the gradual
 guarantee:
 
@@ -293,6 +307,7 @@ reveal_mro(Foo)  # revealed: (<class 'Foo'>, Unknown, <class 'object'>)
 def f():
     if returns_bool():
         class C: ...
+
     else:
         class C: ...
 
@@ -316,7 +331,7 @@ class Foo(EitherOr): ...
 ## `__bases__` is a union of a dynamic type and valid bases
 
 If a dynamic type such as `Any` or `Unknown` is one of the elements in the union, and all other
-types *would be* valid class bases, we do not emit an `invalid-base` or `unsupported-base`
+types _would be_ valid class bases, we do not emit an `invalid-base` or `unsupported-base`
 diagnostic, and we use the dynamic type as a base to prevent further downstream errors.
 
 ```py
@@ -398,10 +413,10 @@ if returns_bool():
 else:
     class B(Y, X): ...
 
-# revealed: (<class 'B'>, <class 'X'>, <class 'Y'>, <class 'O'>, <class 'object'>) | (<class 'B'>, <class 'Y'>, <class 'X'>, <class 'O'>, <class 'object'>)
+# revealed: (<class 'mdtest_snippet.B @ src/mdtest_snippet.py:25:11'>, <class 'X'>, <class 'Y'>, <class 'O'>, <class 'object'>) | (<class 'mdtest_snippet.B @ src/mdtest_snippet.py:28:11'>, <class 'Y'>, <class 'X'>, <class 'O'>, <class 'object'>)
 reveal_mro(B)
 
-# error: 12 [unsupported-base] "Unsupported class base with type `<class 'mdtest_snippet.B @ src/mdtest_snippet.py:25'> | <class 'mdtest_snippet.B @ src/mdtest_snippet.py:28'>`"
+# error: 12 [unsupported-base] "Unsupported class base with type `<class 'mdtest_snippet.B @ src/mdtest_snippet.py:25:11'> | <class 'mdtest_snippet.B @ src/mdtest_snippet.py:28:11'>`"
 class Z(A, B): ...
 
 reveal_mro(Z)  # revealed: (<class 'Z'>, Unknown, <class 'object'>)
@@ -440,6 +455,20 @@ class Bad2:
 
 class BadSub1(Bad1()): ...  # error: [invalid-base]
 class BadSub2(Bad2()): ...  # error: [invalid-base]
+```
+
+For a union base where one member lacks `__mro_entries__`, `invalid-base` should be emitted with a
+sub-diagnostic identifying the problematic union member:
+
+```py
+class HasMroEntries:
+    def __mro_entries__(self, bases: tuple[type, ...]) -> tuple[type, ...]:
+        return ()
+
+class NoMroEntries: ...
+
+def _(base: HasMroEntries | NoMroEntries):
+    class Foo(base): ...  # error: [invalid-base]
 ```
 
 ## `__bases__` lists with duplicate bases
@@ -498,52 +527,31 @@ class VeryEggyOmelette(
 # fmt: off
 ```
 
-A `type: ignore` comment can suppress `duplicate-bases` errors if it is on the first or last line of
-the class "header":
+A `type: ignore` comment can only suppress `duplicate-bases` errors if it is on the same line as the
+class name:
 
 ```py
 # fmt: off
 
 class A: ...
 
-class B(  # type: ignore[duplicate-base]
+class B(  # type: ignore[ty:duplicate-base]
     A,
     A,
 ): ...
 
-class C(
+class C(  # error: [duplicate-base]
     A,
     A
-):  # type: ignore[duplicate-base]
+# error: [unused-type-ignore-comment]
+):  # type: ignore[ty:duplicate-base]
     x: int
 
 # fmt: on
 ```
 
-But it will not suppress the error if it occurs in the class body, or on the duplicate base itself.
-The justification for this is that it is the class definition as a whole that will raise an
-exception at runtime, not a sub-expression in the class's bases list.
-
-```py
-# fmt: off
-
-# error: [duplicate-base]
-class D(
-    A,
-    # error: [unused-ignore-comment]
-    A,  # type: ignore[duplicate-base]
-): ...
-
-# error: [duplicate-base]
-class E(
-    A,
-    A
-):
-    # error: [unused-ignore-comment]
-    x: int  # type: ignore[duplicate-base]
-
-# fmt: on
-```
+This is a limitation that we live with for now, since it seems anyway highly unlikely that anybody
+would want to suppress a `duplicate-base` diagnostic.
 
 ## `__bases__` lists with duplicate `Unknown` bases
 
@@ -575,6 +583,69 @@ bases materialize to:
 class Bar(UnknownBase1, Foo, UnknownBase2, Foo): ...
 
 reveal_mro(Bar)  # revealed: (<class 'Bar'>, Unknown, <class 'object'>)
+```
+
+Starred bases that expand to fixed-length tuples still report diagnostics for the unpacked base
+entries:
+
+```py
+from ty_extensions import reveal_mro
+
+duplicate_bases = (int, int)
+invalid_bases = (int, 1)
+
+# error: [duplicate-base] "Duplicate base class `int`"
+class InlineDuplicateBases(*(int, int)): ...
+
+# error: [duplicate-base] "Duplicate base class `int`"
+class NameDuplicateBases(*duplicate_bases): ...
+
+reveal_mro(InlineDuplicateBases)  # revealed: (<class 'InlineDuplicateBases'>, Unknown, <class 'object'>)
+reveal_mro(NameDuplicateBases)  # revealed: (<class 'NameDuplicateBases'>, Unknown, <class 'object'>)
+
+# error: [invalid-base] "Invalid class base with type `Literal[1]`"
+class StarredInvalidBases(*invalid_bases): ...
+```
+
+Per-base lint checks also see the unpacked entries:
+
+```py
+from typing import Generic, NamedTuple, Protocol
+
+# error: [inconsistent-mro]
+# error: [subclass-of-final-class]
+class InheritsFromFinalViaStarred(*(int, bool)): ...
+
+final_bases = (int, bool)
+
+# error: [inconsistent-mro]
+# error: [subclass-of-final-class]
+class InheritsFromFinalViaNamedStarred(*final_bases): ...
+
+# error: [instance-layout-conflict]
+# error: [invalid-named-tuple]
+# error: [invalid-named-tuple]
+class NamedTupleWithStarredBases(NamedTuple, *(int, str)): ...
+
+# error: [inconsistent-mro]
+# error: [invalid-protocol]
+# error: [invalid-protocol]
+class ProtocolWithStarredBases(Protocol, *(int, str)): ...
+
+# error: [invalid-base]
+class BareGenericInStarred(*(int, Generic)): ...
+```
+
+## Inline tuple-literal starred bases point diagnostics at unpacked elements
+
+<!-- snapshot-diagnostics -->
+
+```py
+# error: [duplicate-base]
+class InlineTupleDuplicateBases(*(int, int)): ...
+
+# error: [invalid-base]
+class InlineTupleInvalidBases(*(int, 1)): ...
 ```
 
 ## Unrelated objects inferred as `Any`/`Unknown` do not have special `__mro__` attributes
@@ -709,19 +780,23 @@ python-version = "3.13"
 from ty_extensions import reveal_mro
 
 class C(C.a): ...
+
 reveal_type(C.__class__)  # revealed: <class 'type'>
 reveal_mro(C)  # revealed: (<class 'C'>, Unknown, <class 'object'>)
 
-class D(D.a):
+class D(D.a):  # error: [unsupported-base]
     a: D
+
 reveal_type(D.__class__)  # revealed: <class 'type'>
 reveal_mro(D)  # revealed: (<class 'D'>, Unknown, <class 'object'>)
 
 class E[T](E.a): ...
+
 reveal_type(E.__class__)  # revealed: <class 'type'>
 reveal_mro(E)  # revealed: (<class 'E[Unknown]'>, Unknown, typing.Generic, <class 'object'>)
 
 class F[T](F(), F): ...  # error: [cyclic-class-definition]
+
 reveal_type(F.__class__)  # revealed: type[Unknown]
 reveal_mro(F)  # revealed: (<class 'F[Unknown]'>, Unknown, <class 'object'>)
 ```

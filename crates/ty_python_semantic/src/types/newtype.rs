@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
-
 use crate::Db;
-use crate::semantic_index::definition::{Definition, DefinitionKind};
 use crate::types::constraints::ConstraintSet;
+use crate::types::relation::{DisjointnessChecker, TypeRelation, TypeRelationChecker};
 use crate::types::{ClassType, KnownUnion, Type, definition_expression_type, visitor};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
+use rustc_hash::FxHashSet;
+use ty_python_core::definition::{Definition, DefinitionKind};
 
 /// A `typing.NewType` declaration, either from the perspective of the
 /// identity-callable-that-acts-like-a-subtype-in-type-expressions returned by the call to
@@ -22,12 +22,7 @@ use ruff_python_ast as ast;
 /// - `typing.NewType`: `Type::ClassLiteral(ClassLiteral)` with `KnownClass::NewType`.
 /// - `Foo`: `Type::KnownInstance(KnownInstanceType::NewType(NewType { .. }))`
 /// - `x`: `Type::NewTypeInstance(NewType { .. })`
-///
-/// # Ordering
-/// Ordering is based on the newtype's salsa-assigned id and not on its values.
-/// The id may change between runs, or when the newtype was garbage collected and recreated.
 #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
-#[derive(PartialOrd, Ord)]
 pub struct NewType<'db> {
     /// The name of this NewType (e.g. `"Foo"`)
     #[returns(ref)]
@@ -56,7 +51,7 @@ impl<'db> NewType<'db> {
     }
 
     #[salsa::tracked(
-        cycle_initial=lazy_base_cycle_initial,
+        cycle_initial=|db, _, _| NewTypeBase::ClassType(ClassType::object(db)),
         heap_size=ruff_memory_usage::heap_size
     )]
     fn lazy_base(self, db: &'db dyn Db) -> NewTypeBase<'db> {
@@ -96,7 +91,7 @@ impl<'db> NewType<'db> {
     fn iter_bases(self, db: &'db dyn Db) -> NewTypeBaseIter<'db> {
         NewTypeBaseIter {
             current: Some(self),
-            seen_before: BTreeSet::new(),
+            seen_before: FxHashSet::default(),
             db,
         }
     }
@@ -113,37 +108,11 @@ impl<'db> NewType<'db> {
         Type::object()
     }
 
-    pub(crate) fn is_equivalent_to_impl(self, db: &'db dyn Db, other: Self) -> bool {
+    pub(crate) fn is_equivalent_to(self, db: &'db dyn Db, other: Self) -> bool {
         // Two instances of the "same" `NewType` won't compare == if one of them has an eagerly
         // evaluated base (or a normalized base, etc.) and the other doesn't, so we only check for
         // equality of the `definition`.
         self.definition(db) == other.definition(db)
-    }
-
-    // Since a regular class can't inherit from a newtype, the only way for one newtype to be a
-    // subtype of another is to have the other in its chain of newtype bases. Once we reach the
-    // base class, we don't have to keep looking.
-    pub(crate) fn has_relation_to_impl(self, db: &'db dyn Db, other: Self) -> ConstraintSet<'db> {
-        if self.is_equivalent_to_impl(db, other) {
-            return ConstraintSet::from(true);
-        }
-        for base in self.iter_bases(db) {
-            if let NewTypeBase::NewType(base_newtype) = base {
-                if base_newtype.is_equivalent_to_impl(db, other) {
-                    return ConstraintSet::from(true);
-                }
-            }
-        }
-        ConstraintSet::from(false)
-    }
-
-    pub(crate) fn is_disjoint_from_impl(self, db: &'db dyn Db, other: Self) -> ConstraintSet<'db> {
-        // Two NewTypes are disjoint if they're not equal and neither inherits from the other.
-        // NewTypes have single inheritance, and a regular class can't inherit from a NewType, so
-        // it's not possible for some third type to multiply-inherit from both.
-        let mut self_not_subtype_of_other = self.has_relation_to_impl(db, other).negate(db);
-        let other_not_subtype_of_self = other.has_relation_to_impl(db, self).negate(db);
-        self_not_subtype_of_other.intersect(db, other_not_subtype_of_self)
     }
 
     /// Create a new `NewType` by mapping the underlying `ClassType`. This descends through any
@@ -206,6 +175,69 @@ impl<'db> NewType<'db> {
         self.try_map_base_class_type(db, |class_type| Some(f(class_type)))
             .unwrap()
     }
+
+    pub(super) fn recursive_type_normalized_impl(
+        self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+    ) -> Option<Self> {
+        let eager_base = match self.eager_base(db) {
+            Some(base) => Some(base.recursive_type_normalized_impl(db, div, nested)?),
+            None => None,
+        };
+
+        Some(NewType::new(
+            db,
+            self.name(db).clone(),
+            self.definition(db),
+            eager_base,
+        ))
+    }
+}
+
+impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
+    pub(super) fn check_newtype_pair(
+        &self,
+        db: &'db dyn Db,
+        source: NewType<'db>,
+        target: NewType<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        // Since a regular class can't inherit from a newtype, the only way for one newtype to be a
+        // subtype of another is to have the other in its chain of newtype bases. Once we reach the
+        // base class, we don't have to keep looking.
+        if source.is_equivalent_to(db, target) {
+            return self.always();
+        }
+        for base in source.iter_bases(db) {
+            if let NewTypeBase::NewType(base_newtype) = base
+                && base_newtype.is_equivalent_to(db, target)
+            {
+                return self.always();
+            }
+        }
+        self.never()
+    }
+}
+
+impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
+    pub(super) fn check_newtype_pair(
+        &self,
+        db: &'db dyn Db,
+        left: NewType<'db>,
+        right: NewType<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        // Two NewTypes are disjoint if they're not equal and neither inherits from the other.
+        // NewTypes have single inheritance, and a regular class can't inherit from a NewType, so
+        // it's not possible for some third type to multiply-inherit from both.
+        let relation_checker = self.as_relation_checker(TypeRelation::Subtyping);
+        relation_checker
+            .check_newtype_pair(db, left, right)
+            .or(db, self.constraints, || {
+                relation_checker.check_newtype_pair(db, right, left)
+            })
+            .negate(db, self.constraints)
+    }
 }
 
 pub(crate) fn walk_newtype_instance_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
@@ -213,7 +245,14 @@ pub(crate) fn walk_newtype_instance_type<'db, V: visitor::TypeVisitor<'db> + ?Si
     newtype: NewType<'db>,
     visitor: &V,
 ) {
-    visitor.visit_type(db, newtype.base(db).instance_type(db));
+    let base = if visitor.should_visit_lazy_type_attributes() {
+        Some(newtype.base(db))
+    } else {
+        newtype.eager_base(db)
+    };
+    if let Some(base) = base {
+        visitor.visit_type(db, base.instance_type(db));
+    }
 }
 
 /// `typing.NewType` typically wraps a class type, but it can also wrap another newtype.
@@ -238,6 +277,23 @@ impl<'db> NewTypeBase<'db> {
             NewTypeBase::Complex => KnownUnion::Complex.to_type(db),
         }
     }
+
+    fn recursive_type_normalized_impl(
+        self,
+        db: &'db dyn Db,
+        div: Type<'db>,
+        nested: bool,
+    ) -> Option<Self> {
+        match self {
+            NewTypeBase::ClassType(class_type) => class_type
+                .recursive_type_normalized_impl(db, div, nested)
+                .map(NewTypeBase::ClassType),
+            NewTypeBase::NewType(newtype) => newtype
+                .recursive_type_normalized_impl(db, div, nested)
+                .map(NewTypeBase::NewType),
+            NewTypeBase::Float | NewTypeBase::Complex => Some(self),
+        }
+    }
 }
 
 /// An iterator over the transitive bases of a `NewType`. In the most common case, e.g.
@@ -256,7 +312,7 @@ impl<'db> NewTypeBase<'db> {
 /// over the base class need to pass down a cycle-detecting visitor as usual.
 struct NewTypeBaseIter<'db> {
     current: Option<NewType<'db>>,
-    seen_before: BTreeSet<NewType<'db>>,
+    seen_before: FxHashSet<NewType<'db>>,
     db: &'db dyn Db,
 }
 
@@ -284,12 +340,4 @@ impl<'db> Iterator for NewTypeBaseIter<'db> {
             }
         }
     }
-}
-
-fn lazy_base_cycle_initial<'db>(
-    db: &'db dyn Db,
-    _id: salsa::Id,
-    _self: NewType<'db>,
-) -> NewTypeBase<'db> {
-    NewTypeBase::ClassType(ClassType::object(db))
 }

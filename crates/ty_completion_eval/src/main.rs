@@ -14,7 +14,7 @@ use regex::bytes::Regex;
 
 use ruff_db::files::system_path_to_file;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
-use ty_ide::Completion;
+use ty_ide::{Completion, CompletionCapabilities};
 use ty_module_resolver::ModuleName;
 use ty_project::metadata::Options;
 use ty_project::metadata::options::EnvironmentOptions;
@@ -290,7 +290,7 @@ impl Task {
             ..Options::default()
         });
         project_metadata.apply_configuration_files(&system)?;
-        let db = ProjectDatabase::new(project_metadata, system)?;
+        let db = ProjectDatabase::fallible(project_metadata, system)?;
         Ok(Task {
             db,
             dir: project_path.to_path_buf(),
@@ -329,7 +329,13 @@ impl Task {
                 self.cursor.offset
             )
         })?;
-        let completions = ty_ide::completion(&self.db, &self.settings, file, offset);
+        let completions = ty_ide::completion(
+            &self.db,
+            &self.settings,
+            CompletionCapabilities::default(),
+            file,
+            offset,
+        );
         Ok(completions)
     }
 
@@ -377,6 +383,7 @@ impl From<&CompletionSettings> for ty_ide::CompletionSettings {
     fn from(x: &CompletionSettings) -> ty_ide::CompletionSettings {
         ty_ide::CompletionSettings {
             auto_import: x.auto_import,
+            ..ty_ide::CompletionSettings::default()
         }
     }
 }
@@ -518,7 +525,7 @@ impl CompletionAnswer {
     fn qualified(&self) -> String {
         self.module
             .as_ref()
-            .map(|module| format!("{module}.{}", self.symbol))
+            .map(|module| format!("{module}{}", self.symbol))
             .unwrap_or_else(|| self.symbol.clone())
     }
 }
@@ -594,7 +601,7 @@ fn copy_file(src: &SystemPath, dst: &SystemPath) -> anyhow::Result<Vec<Cursor>> 
         // Our module/symbol identifier regex here is certainly more
         // permissive than necessary, but I think that should be fine
         // for this silly little syntax. ---AG
-        Regex::new(r"<CURSOR:\s*(?:(?<module>[\S--.]+)\.)?(?<symbol>[\S--.]+)>").unwrap()
+        Regex::new(r"<CURSOR:\s*(?<module>(?:[\S--.]+\.)*)(?<symbol>[\S--.]+)>").unwrap()
     });
 
     let src_data =
@@ -619,14 +626,18 @@ fn copy_file(src: &SystemPath, dst: &SystemPath) -> anyhow::Result<Vec<Cursor>> 
         let symbol = str::from_utf8(&caps["symbol"])
             .context("expected symbol in cursor directive in `{src}` is not valid UTF-8")?
             .to_string();
-        let module = caps
-            .name("module")
-            .map(|module| {
-                str::from_utf8(module.as_bytes())
-                    .context("expected module in cursor directive in `{src}` is not valid UTF-8")
-            })
-            .transpose()?
-            .map(ToString::to_string);
+        let module =
+            caps.name("module")
+                .and_then(|module| {
+                    if module.as_bytes().is_empty() {
+                        return None;
+                    }
+                    Some(str::from_utf8(module.as_bytes()).context(
+                        "expected module in cursor directive in `{src}` is not valid UTF-8",
+                    ))
+                })
+                .transpose()?
+                .map(ToString::to_string);
         let answer = CompletionAnswer { symbol, module };
         cursors.push(Cursor {
             path: dst.to_path_buf(),

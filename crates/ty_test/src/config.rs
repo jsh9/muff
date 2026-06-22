@@ -5,6 +5,9 @@
 //! ```toml
 //! log = true # or log = "ty=WARN"
 //!
+//! [rules]
+//! possibly-unresolved-reference = "warn"
+//!
 //! [environment]
 //! python-version = "3.10"
 //!
@@ -12,11 +15,13 @@
 //! dependencies = ["pydantic==2.12.2"]
 //! ```
 
-use anyhow::Context;
+use std::collections::BTreeMap;
+
 use ruff_db::system::{SystemPath, SystemPathBuf};
 use ruff_python_ast::PythonVersion;
 use serde::{Deserialize, Serialize};
-use ty_python_semantic::PythonPlatform;
+use ty_python_core::platform::PythonPlatform;
+use ty_python_semantic::lint::Level;
 
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -24,6 +29,8 @@ pub(crate) struct MarkdownTestConfig {
     pub(crate) environment: Option<Environment>,
 
     pub(crate) log: Option<Log>,
+
+    pub(crate) rules: Option<Rules>,
 
     pub(crate) analysis: Option<Analysis>,
 
@@ -34,13 +41,13 @@ pub(crate) struct MarkdownTestConfig {
 
     /// Project configuration for installing external dependencies.
     pub(crate) project: Option<Project>,
+
+    /// Simulate the use passing `-v` on the command line,
+    /// which can be used to show more information in test diagnostics.
+    pub(crate) verbose: Option<bool>,
 }
 
 impl MarkdownTestConfig {
-    pub(crate) fn from_str(s: &str) -> anyhow::Result<Self> {
-        toml::from_str(s).context("Error while parsing Markdown TOML config")
-    }
-
     pub(crate) fn python_version(&self) -> Option<PythonVersion> {
         self.environment.as_ref()?.python_version
     }
@@ -64,7 +71,13 @@ impl MarkdownTestConfig {
     pub(crate) fn dependencies(&self) -> Option<&[String]> {
         self.project.as_ref()?.dependencies.as_deref()
     }
+
+    pub(crate) fn verbose(&self) -> bool {
+        self.verbose.unwrap_or_default()
+    }
 }
+
+pub(crate) type Rules = BTreeMap<String, Level>;
 
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -110,6 +123,10 @@ pub(crate) struct Environment {
 pub(crate) struct Analysis {
     /// Whether ty should support `type: ignore` comments.
     pub(crate) respect_type_ignore_comments: Option<bool>,
+
+    pub(crate) allowed_unresolved_imports: Option<Vec<String>>,
+
+    pub(crate) replace_imports_with_any: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

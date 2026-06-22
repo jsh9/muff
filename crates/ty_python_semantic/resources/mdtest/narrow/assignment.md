@@ -35,8 +35,8 @@ class _:
 
 def _():
     reveal_type(a.x)  # revealed: int | None
-    reveal_type(a.y)  # revealed: Unknown | None
-    reveal_type(a.z)  # revealed: Unknown | None
+    reveal_type(a.y)  # revealed: None | Unknown
+    reveal_type(a.z)  # revealed: None | Unknown
 
 if False:
     a = A()
@@ -47,8 +47,8 @@ reveal_type(a.z)  # revealed: Literal[0]
 if True:
     a = A()
 reveal_type(a.x)  # revealed: int | None
-reveal_type(a.y)  # revealed: Unknown | None
-reveal_type(a.z)  # revealed: Unknown | None
+reveal_type(a.y)  # revealed: None | Unknown
+reveal_type(a.z)  # revealed: None | Unknown
 
 a.x = 0
 a.y = 0
@@ -60,8 +60,8 @@ reveal_type(a.z)  # revealed: Literal[0]
 class _:
     a = A()
     reveal_type(a.x)  # revealed: int | None
-    reveal_type(a.y)  # revealed: Unknown | None
-    reveal_type(a.z)  # revealed: Unknown | None
+    reveal_type(a.y)  # revealed: None | Unknown
+    reveal_type(a.z)  # revealed: None | Unknown
 
 def cond() -> bool:
     return True
@@ -76,16 +76,16 @@ class _:
     if cond():
         a = A()
     reveal_type(a.x)  # revealed: int | None
-    reveal_type(a.y)  # revealed: Unknown | None
-    reveal_type(a.z)  # revealed: Unknown | None
+    reveal_type(a.y)  # revealed: None | Unknown
+    reveal_type(a.z)  # revealed: None | Unknown
 
 class _:
     a = A()
 
     class Inner:
         reveal_type(a.x)  # revealed: int | None
-        reveal_type(a.y)  # revealed: Unknown | None
-        reveal_type(a.z)  # revealed: Unknown | None
+        reveal_type(a.y)  # revealed: None | Unknown
+        reveal_type(a.z)  # revealed: None | Unknown
 
 a = A()
 # error: [unresolved-attribute]
@@ -96,7 +96,7 @@ reveal_type(a.dynamically_added)  # revealed: Literal[0]
 # error: [unresolved-reference]
 does.nt.exist = 0
 # error: [unresolved-reference]
-reveal_type(does.nt.exist)  # revealed: Unknown
+reveal_type(does.nt.exist)  # revealed: Literal[0]
 ```
 
 ### Narrowing chain
@@ -135,9 +135,9 @@ a.b = B()
 reveal_type(a.b)  # revealed: B
 reveal_type(a.b.c1)  # revealed: C | None
 reveal_type(a.b.c2)  # revealed: C | None
-# error: [possibly-missing-attribute]
+# error: [unresolved-attribute]
 reveal_type(a.b.c1.d)  # revealed: D | None
-# error: [possibly-missing-attribute]
+# error: [unresolved-attribute]
 reveal_type(a.b.c2.d)  # revealed: D | None
 ```
 
@@ -278,6 +278,8 @@ reveal_type(c[0])  # revealed: str
 ## Complex target
 
 ```py
+from typing import Any
+
 class A:
     x: list[int | None] = []
 
@@ -294,11 +296,33 @@ class C:
     reveal_type(b.a.x[0])  # revealed: Literal[0]
 
 def _():
-    # error: [possibly-missing-attribute]
+    # error: [unresolved-attribute]
     reveal_type(b.a.x[0])  # revealed: int | None
-    # error: [possibly-missing-attribute]
+    # error: [unresolved-attribute]
     reveal_type(b.a.x)  # revealed: list[int | None]
     reveal_type(b.a)  # revealed: A | None
+
+class D: ...
+
+class E:
+    def __init__(self):
+        self.d = D()
+
+class F:
+    def __init__(self):
+        self.e = E()
+
+class Mock(Any): ...
+
+f = F()
+reveal_type(f.e)  # revealed: E
+f.e = Mock()
+reveal_type(f.e)  # revealed: Mock
+
+f2 = F()
+reveal_type(f2.e.d)  # revealed: D
+f2.e.d = Mock()
+reveal_type(f2.e.d)  # revealed: Mock
 ```
 
 ## Invalid assignments are not used for narrowing

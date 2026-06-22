@@ -15,10 +15,14 @@ use ruff_db::system::System;
 use ruff_db::vendored::VendoredFileSystem;
 use salsa::{Database, Event, Setter};
 use ty_module_resolver::SearchPaths;
+use ty_python_core::program::{
+    FallibleStrategy, MisconfigurationStrategy, Program, UseDefaultStrategy,
+};
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
-use ty_python_semantic::{AnalysisSettings, Db as SemanticDb, Program};
+use ty_python_semantic::{AnalysisSettings, Db as SemanticDb};
 
 mod changes;
+mod ignore;
 
 #[salsa::db]
 pub trait Db: SemanticDb {
@@ -30,6 +34,15 @@ pub trait Db: SemanticDb {
 #[salsa::db]
 #[derive(Clone)]
 pub struct ProjectDatabase {
+    // This handle must remain stable for the lifetime of the database.
+    //
+    // Many tracked queries branch on the untracked `db.project()` read before
+    // consulting tracked `Project` fields. Replacing the handle during reload
+    // therefore changes query behavior outside salsa's dependency graph and can
+    // trigger stale results.
+    //
+    // Structural reloads must update the existing `Project` in place via salsa
+    // setters instead of swapping in a freshly constructed handle.
     project: Option<Project>,
     files: Files,
 
@@ -45,7 +58,28 @@ pub struct ProjectDatabase {
 }
 
 impl ProjectDatabase {
-    pub fn new<S>(project_metadata: ProjectMetadata, system: S) -> anyhow::Result<Self>
+    /// Creates a new database, returning an error if the project metadata is misconfigured.
+    pub fn fallible<S>(project_metadata: ProjectMetadata, system: S) -> anyhow::Result<Self>
+    where
+        S: System + 'static + Send + Sync + RefUnwindSafe,
+    {
+        Self::new(project_metadata, system, &FallibleStrategy)
+    }
+
+    /// Creates a new database, substituting default values for any misconfigured settings.
+    pub fn use_defaults<S>(project_metadata: ProjectMetadata, system: S) -> Self
+    where
+        S: System + 'static + Send + Sync + RefUnwindSafe,
+    {
+        let Ok(db) = Self::new(project_metadata, system, &UseDefaultStrategy);
+        db
+    }
+
+    fn new<S, Strategy: MisconfigurationStrategy>(
+        project_metadata: ProjectMetadata,
+        system: S,
+        strategy: &Strategy,
+    ) -> Result<Self, Strategy::Error<anyhow::Error>>
     where
         S: System + 'static + Send + Sync + RefUnwindSafe,
     {
@@ -71,15 +105,36 @@ impl ProjectDatabase {
         // TODO: Use the `program_settings` to compute the key for the database's persistent
         //   cache and load the cache if it exists.
         //   we may want to have a dedicated method for this?
+        // Important: For persistent caching it's essential that we can compute the
+        // cache key before loading the DB. Because of that, access to the `db` (other than system and vendored) is
+        // strictly forbidden before resolving the `program_settings`.
 
         // Initialize the `Program` singleton
-        let program_settings = project_metadata.to_program_settings(db.system(), db.vendored())?;
+        let (program_settings, program_settings_diagnostics) = strategy.to_anyhow(
+            project_metadata.to_program_settings(db.system(), db.vendored(), strategy),
+        )?;
+
+        // This must be called before `from_settings`, or the `SearchPath` root
+        // will take precedence over the `Project` root, resulting in
+        // all project files having HIGH durability.
+        project_metadata.try_add_project_root(&db);
+
         Program::from_settings(&db, program_settings);
 
-        db.project = Some(
-            Project::from_metadata(&db, project_metadata)
-                .map_err(|error| anyhow::anyhow!("{}", error.pretty(&db)))?,
-        );
+        let (settings, settings_diagnostics) = strategy.map_err(
+            project_metadata
+                .options()
+                .to_settings(&db, project_metadata.root(), strategy),
+            |error| anyhow::anyhow!("{}", error.pretty(&db)),
+        )?;
+
+        db.project = Some(Project::from_metadata(
+            &db,
+            project_metadata,
+            settings,
+            settings_diagnostics,
+            program_settings_diagnostics,
+        ));
 
         Ok(db)
     }
@@ -241,12 +296,11 @@ pub struct SalsaMemoryDump {
     memos: Vec<(&'static str, salsa::IngredientInfo)>,
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[expect(clippy::cast_precision_loss)]
 fn bytes_to_mb(total: usize) -> f64 {
     total as f64 / 1_000_000.
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 impl SalsaMemoryDump {
     /// Returns a short report that provides total memory usage information.
     pub fn display_short(&self) -> impl fmt::Display + '_ {
@@ -382,68 +436,74 @@ impl SalsaMemoryDump {
         DisplayFull(self)
     }
 
-    /// Returns a redacted report that provides rounded totals of memory usage, to avoid
-    /// overly sensitive diffs in `mypy-primer` runs.
-    pub fn display_mypy_primer(&self) -> impl fmt::Display + '_ {
-        struct DisplayShort<'a>(&'a SalsaMemoryDump);
-
-        fn round_memory(total: usize) -> usize {
-            // Round the number to the nearest power of 1.05. This gives us a
-            // 2.5% threshold before the memory usage number is considered to have
-            // changed.
-            //
-            // TODO: Small changes in memory usage may cause the number to be rounded
-            // into the next power if it happened to already be close to the threshold.
-            // This also means that differences may surface as a result of small changes
-            // over time that are unrelated to the current change. Ideally we could compare
-            // the exact numbers across runs and compute the difference, but we don't have
-            // the infrastructure for that currently.
-            const BASE: f64 = 1.05;
-            BASE.powf(bytes_to_mb(total).log(BASE).round()) as usize
+    /// Serializes the memory dump to JSON.
+    pub fn to_json(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct MemoryReport {
+            total_bytes: usize,
+            struct_metadata_bytes: usize,
+            struct_fields_bytes: usize,
+            memo_metadata_bytes: usize,
+            memo_fields_bytes: usize,
+            structs: Vec<IngredientReport>,
+            queries: Vec<QueryReport>,
         }
 
-        impl fmt::Display for DisplayShort<'_> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let SalsaMemoryDump {
-                    total_fields,
-                    total_metadata,
-                    total_memo_fields,
-                    total_memo_metadata,
-                    ..
-                } = *self.0;
-
-                writeln!(f, "=======SALSA SUMMARY=======")?;
-
-                writeln!(
-                    f,
-                    "TOTAL MEMORY USAGE: ~{}MB",
-                    round_memory(
-                        total_metadata + total_fields + total_memo_fields + total_memo_metadata
-                    )
-                )?;
-
-                writeln!(
-                    f,
-                    "    struct metadata = ~{}MB",
-                    round_memory(total_metadata)
-                )?;
-                writeln!(f, "    struct fields = ~{}MB", round_memory(total_fields))?;
-                writeln!(
-                    f,
-                    "    memo metadata = ~{}MB",
-                    round_memory(total_memo_metadata)
-                )?;
-                writeln!(
-                    f,
-                    "    memo fields = ~{}MB",
-                    round_memory(total_memo_fields)
-                )?;
-
-                Ok(())
-            }
+        #[derive(serde::Serialize)]
+        struct IngredientReport {
+            name: String,
+            metadata_bytes: usize,
+            fields_bytes: usize,
+            count: usize,
         }
 
-        DisplayShort(self)
+        #[derive(serde::Serialize)]
+        struct QueryReport {
+            name: String,
+            return_type: String,
+            metadata_bytes: usize,
+            fields_bytes: usize,
+            count: usize,
+        }
+
+        let structs = self
+            .ingredients
+            .iter()
+            .map(|ingredient| IngredientReport {
+                name: ingredient.debug_name().to_string(),
+                metadata_bytes: ingredient.size_of_metadata(),
+                fields_bytes: ingredient.size_of_fields()
+                    + ingredient.heap_size_of_fields().unwrap_or(0),
+                count: ingredient.count(),
+            })
+            .collect();
+
+        let queries = self
+            .memos
+            .iter()
+            .map(|(query_fn, memo)| QueryReport {
+                name: (*query_fn).to_string(),
+                return_type: memo.debug_name().to_string(),
+                metadata_bytes: memo.size_of_metadata(),
+                fields_bytes: memo.size_of_fields() + memo.heap_size_of_fields().unwrap_or(0),
+                count: memo.count(),
+            })
+            .collect();
+
+        let report = MemoryReport {
+            total_bytes: self.total_fields
+                + self.total_metadata
+                + self.total_memo_fields
+                + self.total_memo_metadata,
+            struct_metadata_bytes: self.total_metadata,
+            struct_fields_bytes: self.total_fields,
+            memo_metadata_bytes: self.total_memo_metadata,
+            memo_fields_bytes: self.total_memo_fields,
+            structs,
+            queries,
+        };
+
+        serde_json::to_string_pretty(&report).expect("Failed to serialize memory report")
     }
 }
 
@@ -456,9 +516,8 @@ impl ty_module_resolver::Db for ProjectDatabase {
 
 #[salsa::db]
 impl SemanticDb for ProjectDatabase {
-    fn should_check_file(&self, file: File) -> bool {
-        self.project
-            .is_some_and(|project| project.should_check_file(self, file))
+    fn check_file(&self, file: File) -> Vec<Diagnostic> {
+        ProjectDatabase::check_file(self, file)
     }
 
     fn rule_selection(&self, file: File) -> &RuleSelection {
@@ -470,12 +529,25 @@ impl SemanticDb for ProjectDatabase {
         ty_python_semantic::default_lint_registry()
     }
 
-    fn analysis_settings(&self) -> &AnalysisSettings {
-        self.project().settings(self).analysis()
+    fn analysis_settings(&self, file: File) -> &AnalysisSettings {
+        let settings = file_settings(self, file);
+        settings.analysis(self)
     }
 
     fn verbose(&self) -> bool {
         self.project().verbose(self)
+    }
+
+    fn dyn_clone(&self) -> Box<dyn SemanticDb> {
+        Box::new(self.clone())
+    }
+}
+
+#[salsa::db]
+impl ty_python_core::Db for ProjectDatabase {
+    fn should_check_file(&self, file: File) -> bool {
+        self.project
+            .is_some_and(|project| project.should_check_file(self, file))
     }
 }
 
@@ -528,18 +600,21 @@ mod format {
 }
 
 #[cfg(any(test, feature = "testing"))]
-pub(crate) mod tests {
+#[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+pub(crate) mod testing {
     use std::sync::{Arc, Mutex};
 
     use ruff_db::Db as SourceDb;
-    use ruff_db::files::{FileRootKind, Files};
+    use ruff_db::diagnostic::Diagnostic;
+    use ruff_db::files::{File, FileRootKind, Files};
     use ruff_db::system::{DbWithTestSystem, System, TestSystem};
     use ruff_db::vendored::VendoredFileSystem;
+    use ruff_python_ast::PythonVersion;
     use ty_module_resolver::SearchPathSettings;
+    use ty_python_core::platform::PythonPlatform;
+    use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings};
     use ty_python_semantic::lint::{LintRegistry, RuleSelection};
-    use ty_python_semantic::{
-        AnalysisSettings, Program, ProgramSettings, PythonPlatform, PythonVersionWithSource,
-    };
+    use ty_python_semantic::{AnalysisSettings, PythonVersionWithSource};
 
     use crate::db::Db;
     use crate::{Project, ProjectMetadata};
@@ -575,28 +650,43 @@ pub(crate) mod tests {
                 project: None,
             };
 
-            let project = Project::from_metadata(&db, project).unwrap();
+            let (settings, settings_diagnostics) = project
+                .options()
+                .to_settings(&db, project.root(), &FallibleStrategy)
+                .unwrap();
+            let project =
+                Project::from_metadata(&db, project, settings, settings_diagnostics, Vec::new());
             db.project = Some(project);
             db
         }
 
         pub fn init_program(&mut self) -> anyhow::Result<()> {
+            self.init_program_with_python_version(PythonVersion::latest_ty())
+        }
+
+        pub fn init_program_with_python_version(
+            &mut self,
+            python_version: PythonVersion,
+        ) -> anyhow::Result<()> {
             let root = self.project().root(self);
 
             let search_paths = SearchPathSettings::new(vec![root.to_path_buf()])
-                .to_search_paths(self.system(), self.vendored())
+                .to_search_paths(self.system(), self.vendored(), &FallibleStrategy)
                 .expect("Valid search path settings");
+
+            self.files().try_add_root(self, root, FileRootKind::Project);
 
             Program::from_settings(
                 self,
                 ProgramSettings {
-                    python_version: PythonVersionWithSource::default(),
+                    python_version: PythonVersionWithSource {
+                        source: ty_python_semantic::PythonVersionSource::Default,
+                        version: python_version,
+                    },
                     python_platform: PythonPlatform::default(),
                     search_paths,
                 },
             );
-
-            self.files().try_add_root(self, root, FileRootKind::Project);
 
             Ok(())
         }
@@ -648,9 +738,17 @@ pub(crate) mod tests {
     }
 
     #[salsa::db]
-    impl ty_python_semantic::Db for TestDb {
+    impl ty_python_core::Db for TestDb {
         fn should_check_file(&self, file: ruff_db::files::File) -> bool {
             !file.path(self).is_vendored_path()
+        }
+    }
+
+    #[salsa::db]
+    impl ty_python_semantic::Db for TestDb {
+        #[inline]
+        fn check_file(&self, file: File) -> Vec<Diagnostic> {
+            self.project().check_file(self, file)
         }
 
         fn rule_selection(&self, _file: ruff_db::files::File) -> &RuleSelection {
@@ -661,12 +759,16 @@ pub(crate) mod tests {
             ty_python_semantic::default_lint_registry()
         }
 
-        fn analysis_settings(&self) -> &AnalysisSettings {
+        fn analysis_settings(&self, _file: ruff_db::files::File) -> &AnalysisSettings {
             self.project().settings(self).analysis()
         }
 
         fn verbose(&self) -> bool {
             false
+        }
+
+        fn dyn_clone(&self) -> Box<dyn ty_python_semantic::Db> {
+            Box::new(self.clone())
         }
     }
 
@@ -683,4 +785,76 @@ pub(crate) mod tests {
 
     #[salsa::db]
     impl salsa::Database for TestDb {}
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_db::Db as _;
+    use ruff_db::files::FileRootKind;
+    use ruff_db::system::{SystemPathBuf, TestSystem};
+    use ty_module_resolver::list_modules;
+
+    use crate::{ProjectDatabase, ProjectMetadata};
+
+    #[test]
+    fn search_root_registration() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let project = SystemPathBuf::from("/project");
+        let project_src = project.join("src");
+        let external = SystemPathBuf::from("/external");
+        let venv = project.join(".venv");
+
+        system.memory_file_system().write_files_all([
+            (
+                project.join("ty.toml"),
+                r#"
+                [environment]
+                root = ["src", "../external"]
+                extra-paths = [".venv"]
+                "#,
+            ),
+            (project_src.join("foo.py"), ""),
+            (external.join("bar.py"), ""),
+            (venv.join("baz.py"), ""),
+        ])?;
+
+        let metadata = ProjectMetadata::discover(&project, &system)?;
+        let db = ProjectDatabase::fallible(metadata, system)?;
+
+        let modules = list_modules(&db);
+        assert!(
+            modules
+                .iter()
+                .any(|module| module.name(&db).as_str() == "bar")
+        );
+
+        let project_src_root = db
+            .files()
+            .root(&db, &project_src)
+            .expect("project source file root");
+        assert_eq!(project_src_root.path(&db), &*project);
+        assert_eq!(
+            project_src_root.kind_at_time_of_creation(&db),
+            FileRootKind::Project
+        );
+
+        let external_root = db
+            .files()
+            .root(&db, &external)
+            .expect("external first-party file root");
+        assert_eq!(external_root.path(&db), &*external);
+        assert_eq!(
+            external_root.kind_at_time_of_creation(&db),
+            FileRootKind::SearchPath
+        );
+
+        let venv_root = db.files().root(&db, &venv).expect("virtualenv file root");
+        assert_eq!(venv_root.path(&db), &*venv);
+        assert_eq!(
+            venv_root.kind_at_time_of_creation(&db),
+            FileRootKind::SearchPath
+        );
+
+        Ok(())
+    }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ruff"
-version = "0.14.11"
+version = "0.15.18"
 publish = true
 authors = { workspace = true }
 edition = { workspace = true }
@@ -30,6 +30,7 @@ ruff_diagnostics = { workspace = true }
 ruff_graph = { workspace = true, features = ["serde", "clap"] }
 ruff_linter = { workspace = true, features = ["clap"] }
 ruff_macros = { workspace = true }
+ruff_markdown = { workspace = true }
 ruff_notebook = { workspace = true }
 ruff_options_metadata = { workspace = true, features = ["serde"] }
 ruff_python_ast = { workspace = true }
@@ -96,3 +97,6 @@ test-case = { workspace = true }
 
 [lints]
 workspace = true
+
+[lib]
+doctest = false

@@ -6,6 +6,7 @@
 
 ```pyi
 def get_foo() -> Foo: ...
+
 class Foo: ...
 ```
 
@@ -55,6 +56,7 @@ python-version = "3.12"
 
 ```py
 from __future__ import annotations
+from typing import Any
 
 class Foo:
     this: Foo
@@ -89,12 +91,12 @@ class Foo:
 
         # error: [unresolved-reference] "Name `Foo` used when not defined"
         # error: [unresolved-reference] "Name `Bar` used when not defined"
-        class Qux(Foo, Bar, Baz):
+        class Qux(Foo, Bar, Baz[Any]):
             pass
 
         # error: [unresolved-reference] "Name `Foo` used when not defined"
         # error: [unresolved-reference] "Name `Bar` used when not defined"
-        class Quux[_T](Foo, Bar, Baz):
+        class Quux[_T](Foo, Bar, Baz[Any]):
             pass
 
         # error: [unresolved-reference]
@@ -103,7 +105,7 @@ class Foo:
         type U = Foo
         # error: [unresolved-reference]
         type V = Bar
-        type W = Baz
+        type W = Baz  # error: [missing-type-argument]
 
     def h[T: Bar]():
         # error: [unresolved-reference]
@@ -119,6 +121,8 @@ python-version = "3.12"
 ```
 
 ```py
+from typing import Any
+
 class Foo:
     # error: [unresolved-reference]
     this: Foo
@@ -157,12 +161,12 @@ class Foo:
 
         # error: [unresolved-reference] "Name `Foo` used when not defined"
         # error: [unresolved-reference] "Name `Bar` used when not defined"
-        class Qux(Foo, Bar, Baz):
+        class Qux(Foo, Bar, Baz[Any]):
             pass
 
         # error: [unresolved-reference] "Name `Foo` used when not defined"
         # error: [unresolved-reference] "Name `Bar` used when not defined"
-        class Quux[_T](Foo, Bar, Baz):
+        class Quux[_T](Foo, Bar, Baz[Any]):
             pass
 
         # error: [unresolved-reference]
@@ -171,7 +175,7 @@ class Foo:
         type U = Foo
         # error: [unresolved-reference]
         type V = Bar
-        type W = Baz
+        type W = Baz  # error: [missing-type-argument]
 
     def h[T: Bar]():
         # error: [unresolved-reference]
@@ -256,7 +260,6 @@ Forward references in class keyword arguments are allowed in stub files.
 
 ```pyi
 class Foo(metaclass=SomeMeta): ...
-
 class SomeMeta(type): ...
 ```
 

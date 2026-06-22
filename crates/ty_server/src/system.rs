@@ -8,27 +8,27 @@ use std::sync::Arc;
 use crate::Db;
 use crate::document::{DocumentKey, LanguageId};
 use crate::session::index::{Document, Index};
-use lsp_types::Url;
+use lsp_types::Uri;
 use ruff_db::file_revision::FileRevision;
 use ruff_db::files::{File, FilePath};
 use ruff_db::system::walk_directory::WalkDirectoryBuilder;
 use ruff_db::system::{
-    CaseSensitivity, DirectoryEntry, FileType, GlobError, Metadata, PatternError, Result, System,
-    SystemPath, SystemPathBuf, SystemVirtualPath, SystemVirtualPathBuf, WritableSystem,
+    DirectoryEntry, FileType, Metadata, Result, System, SystemPath, SystemPathBuf,
+    SystemVirtualPath, SystemVirtualPathBuf, WhichResult, WritableSystem,
 };
 use ruff_notebook::{Notebook, NotebookError};
 use ruff_python_ast::PySourceType;
 use ty_ide::cached_vendored_path;
 
-/// Returns a [`Url`] for the given [`File`].
-pub(crate) fn file_to_url(db: &dyn Db, file: File) -> Option<Url> {
+/// Returns a [`Uri`] for the given [`File`].
+pub(crate) fn file_to_uri(db: &dyn Db, file: File) -> Option<Uri> {
     match file.path(db) {
-        FilePath::System(system) => Url::from_file_path(system.as_std_path()).ok(),
-        FilePath::SystemVirtual(path) => Url::parse(path.as_str()).ok(),
+        FilePath::System(system) => Uri::from_file_path(system.as_std_path()).ok(),
+        FilePath::SystemVirtual(path) => Uri::parse(path.as_str()).ok(),
         FilePath::Vendored(path) => {
             let system_path = cached_vendored_path(db, path)?;
 
-            Url::from_file_path(system_path.as_std_path()).ok()
+            Uri::from_file_path(system_path.as_std_path()).ok()
         }
     }
 }
@@ -124,12 +124,20 @@ impl LSPSystem {
         extension: Option<&str>,
     ) -> Option<PySourceType> {
         match document {
-            Document::Text(text) => match text.language_id()? {
-                LanguageId::Python => Some(
-                    extension
+            Document::Text(text) => match text.language_id() {
+                LanguageId::Python => {
+                    let source_type = extension
                         .and_then(PySourceType::try_from_extension)
-                        .unwrap_or(PySourceType::Python),
-                ),
+                        .unwrap_or(PySourceType::Python);
+
+                    // JupyterLab presents notebook virtual documents to language servers as
+                    // simple text files rather than serialized `.ipynb` contents. See:
+                    // https://github.com/jupyterlab/jupyterlab/blob/f51404192bf6d0ff79187c884f21e1f91b928146/packages/lsp/src/virtual/document.ts#L308-L314
+                    Some(match source_type {
+                        PySourceType::Ipynb => PySourceType::Python,
+                        source_type => source_type,
+                    })
+                }
                 LanguageId::Other => None,
             },
             Document::Notebook(_) => Some(PySourceType::Ipynb),
@@ -169,8 +177,8 @@ impl System for LSPSystem {
         self.native_system.canonicalize_path(path)
     }
 
-    fn path_exists_case_sensitive(&self, path: &SystemPath, prefix: &SystemPath) -> bool {
-        self.native_system.path_exists_case_sensitive(path, prefix)
+    fn is_same_file(&self, first: &SystemPath, second: &SystemPath) -> Result<bool> {
+        self.native_system.is_same_file(first, second)
     }
 
     fn source_type(&self, path: &SystemPath) -> Option<PySourceType> {
@@ -228,6 +236,10 @@ impl System for LSPSystem {
         }
     }
 
+    fn which(&self, name: &str) -> WhichResult {
+        self.native_system.which(name)
+    }
+
     fn current_directory(&self) -> &SystemPath {
         self.native_system.current_directory()
     }
@@ -251,16 +263,6 @@ impl System for LSPSystem {
         self.native_system.walk_directory(path)
     }
 
-    fn glob(
-        &self,
-        pattern: &str,
-    ) -> std::result::Result<
-        Box<dyn Iterator<Item = std::result::Result<SystemPathBuf, GlobError>> + '_>,
-        PatternError,
-    > {
-        self.native_system.glob(pattern)
-    }
-
     fn as_writable(&self) -> Option<&dyn WritableSystem> {
         self.native_system.as_writable()
     }
@@ -271,10 +273,6 @@ impl System for LSPSystem {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
-    }
-
-    fn case_sensitivity(&self) -> CaseSensitivity {
-        self.native_system.case_sensitivity()
     }
 
     fn env_var(&self, name: &str) -> std::result::Result<String, std::env::VarError> {
@@ -316,8 +314,8 @@ fn document_revision(document: &Document, index: &Index) -> FileRevision {
             // The notification updating the cell content on paste re-used the same version as when the cell was added.
             // Because of that, hash all cell versions and the notebook versions together.
             let mut hasher = DefaultHasher::new();
-            for cell_url in notebook.cell_urls() {
-                if let Ok(cell) = index.document(&DocumentKey::from_url(cell_url)) {
+            for cell_uri in notebook.cell_uris() {
+                if let Ok(cell) = index.document(&DocumentKey::from_uri(cell_uri)) {
                     cell.version().hash(&mut hasher);
                 }
             }

@@ -11,6 +11,9 @@ reveal_type(len(r"conca\t" "ena\tion"))  # revealed: Literal[14]
 reveal_type(len(b"ytes lite" rb"al"))  # revealed: Literal[11]
 reveal_type(len("𝒰𝕹🄸©🕲𝕕ℇ"))  # revealed: Literal[7]
 
+reveal_type("abc".__len__)  # revealed: () -> Literal[3]
+reveal_type(b"abc".__len__)  # revealed: () -> Literal[3]
+
 # fmt: off
 
 reveal_type(len(  # revealed: Literal[7]
@@ -43,13 +46,11 @@ reveal_type(len((1,)))  # revealed: Literal[1]
 reveal_type(len((1, 2)))  # revealed: Literal[2]
 reveal_type(len(tuple()))  # revealed: Literal[0]
 
-# TODO: Handle star unpacks; Should be: Literal[0]
-reveal_type(len((*[],)))  # revealed: Literal[1]
+reveal_type(len((*[],)))  # revealed: Literal[0]
 
 # fmt: off
 
-# TODO: Handle star unpacks; Should be: Literal[1]
-reveal_type(len(  # revealed: Literal[2]
+reveal_type(len(  # revealed: Literal[1]
     (
         *[],
         1,
@@ -58,11 +59,8 @@ reveal_type(len(  # revealed: Literal[2]
 
 # fmt: on
 
-# TODO: Handle star unpacks; Should be: Literal[2]
-reveal_type(len((*[], 1, 2)))  # revealed: Literal[3]
-
-# TODO: Handle star unpacks; Should be: Literal[0]
-reveal_type(len((*[], *{})))  # revealed: Literal[2]
+reveal_type(len((*[], 1, 2)))  # revealed: Literal[2]
+reveal_type(len((*[], *{})))  # revealed: Literal[0]
 ```
 
 Tuple subclasses:

@@ -53,7 +53,7 @@ def unknown() -> Unknown:
     return 1
 
 d = D()
-reveal_type(d.x)  # revealed: Unknown | None
+reveal_type(d.x)  # revealed: None | Unknown
 d.x = 1
 reveal_type(d.x)  # revealed: Literal[1]
 d.x = unknown()
@@ -220,6 +220,13 @@ def _(t1: tuple[int | None, int | None], t2: tuple[int, int] | tuple[None, None]
     else:
         reveal_type(t2)  # revealed: tuple[int, int]
 
+    if (first := t2[0]) is not None:
+        reveal_type(first)  # revealed: int
+        reveal_type(t2)  # revealed: tuple[int, int]
+    else:
+        reveal_type(first)  # revealed: None
+        reveal_type(t2)  # revealed: tuple[None, None]
+
 def _(t3: tuple[int, str] | tuple[None, None] | tuple[bool, bytes]):
     # Narrow to tuples where first element is not None
     if t3[0] is not None:
@@ -305,6 +312,14 @@ def _(x: tuple[Literal["tag1"], A] | tuple[Literal["tag2"], B, C]):
     else:
         reveal_type(x)  # revealed: tuple[Literal["tag1"], A]
 
+def _(x: tuple[Literal["tag1"], A] | tuple[Literal["tag2"], B, C]):
+    if (tag := x[0]) == "tag1":
+        reveal_type(tag)  # revealed: Literal["tag1"]
+        reveal_type(x)  # revealed: tuple[Literal["tag1"], A]
+    else:
+        reveal_type(tag)  # revealed: Literal["tag2"]
+        reveal_type(x)  # revealed: tuple[Literal["tag2"], B, C]
+
 # With int literals
 def _(x: tuple[Literal[1], A] | tuple[Literal[2], B]):
     if x[0] == 1:
@@ -334,6 +349,47 @@ def _(x: tuple[A, Literal["tag1"]] | tuple[B, Literal["tag2"]]):
         reveal_type(x)  # revealed: tuple[A, Literal["tag1"]]
     else:
         reveal_type(x)  # revealed: tuple[B, Literal["tag2"]]
+
+# Works with reversed equality operands too.
+def _(x: tuple[Literal["a"], A] | tuple[Literal["b"], B]):
+    if "a" == x[0]:
+        reveal_type(x)  # revealed: tuple[Literal["a"], A]
+    else:
+        reveal_type(x)  # revealed: tuple[Literal["b"], B]
+
+# Works with reversed inequality operands too.
+def _(x: tuple[Literal["a"], A] | tuple[Literal["b"], B]):
+    if "a" != x[0]:
+        reveal_type(x)  # revealed: tuple[Literal["b"], B]
+    else:
+        reveal_type(x)  # revealed: tuple[Literal["a"], A]
+```
+
+Enum literals are supported as tuple tags, including `IntEnum` literals:
+
+```py
+from enum import Enum, IntEnum
+from typing import Literal
+
+class Tag(Enum):
+    A = 1
+    B = 2
+
+def _(x: tuple[Literal[Tag.A], int] | tuple[Literal[Tag.B], str]):
+    if x[0] == Tag.A:
+        reveal_type(x)  # revealed: tuple[Literal[Tag.A], int]
+    else:
+        reveal_type(x)  # revealed: tuple[Literal[Tag.B], str]
+
+class IntTag(IntEnum):
+    A = 1
+    B = 2
+
+def _(x: tuple[Literal[IntTag.A], int] | tuple[Literal[IntTag.B], str]):
+    if x[0] == IntTag.A:
+        reveal_type(x)  # revealed: tuple[Literal[IntTag.A], int]
+    else:
+        reveal_type(x)  # revealed: tuple[Literal[IntTag.B], str]
 ```
 
 Narrowing is restricted to `Literal` tag elements. If any tuple has a non-literal type at the
@@ -374,6 +430,57 @@ def _(x: tuple[Literal["tag1"], A] | tuple[Literal["tag2"], B] | list[int]):
         reveal_type(x)  # revealed: tuple[Literal["tag1"], A] | list[int]
 ```
 
+### PEP 695 type aliases
+
+Tuple narrowing also works when the union is defined via a PEP 695 type alias:
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Literal
+
+class A: ...
+class B: ...
+
+type TaggedTuple = tuple[Literal["a"], A] | tuple[Literal["b"], B]
+
+def test_equality_narrowing(x: TaggedTuple):
+    if x[0] == "a":
+        reveal_type(x)  # revealed: tuple[Literal["a"], A]
+    else:
+        reveal_type(x)  # revealed: tuple[Literal["b"], B]
+
+type NullableTuple = tuple[int, int] | tuple[None, None]
+
+def test_is_narrowing(t: NullableTuple):
+    if t[0] is not None:
+        reveal_type(t)  # revealed: tuple[int, int]
+    else:
+        reveal_type(t)  # revealed: tuple[None, None]
+
+# Nested type aliases (an alias referring to another alias) also work:
+type InnerTagged = tuple[Literal["a"], A] | tuple[Literal["b"], B]
+type OuterTagged = InnerTagged
+
+def test_nested_equality_narrowing(x: OuterTagged):
+    if x[0] == "a":
+        reveal_type(x)  # revealed: tuple[Literal["a"], A]
+    else:
+        reveal_type(x)  # revealed: tuple[Literal["b"], B]
+
+type InnerNullable = tuple[int, int] | tuple[None, None]
+type OuterNullable = InnerNullable
+
+def test_nested_is_narrowing(t: OuterNullable):
+    if t[0] is not None:
+        reveal_type(t)  # revealed: tuple[int, int]
+    else:
+        reveal_type(t)  # revealed: tuple[None, None]
+```
+
 ### String subscript
 
 ```py
@@ -397,4 +504,140 @@ class D:
 d = D()
 if d.c is not None and d.c[0].x[0] is not None:
     reveal_type(d.c[0].x[0])  # revealed: int
+```
+
+## Narrowing with negative subscripts
+
+Narrowing should work with negative subscripts like `x[-1]`:
+
+```py
+def _(x: list[int | None]):
+    if x[-1] is not None:
+        reveal_type(x[-1])  # revealed: int
+
+def _(x: list[str | None]):
+    if x[-1] is None:
+        reveal_type(x[-1])  # revealed: None
+    else:
+        reveal_type(x[-1])  # revealed: str
+```
+
+Nested negative subscripts should also work:
+
+```py
+def _(x: list[list[int | None]]):
+    if x[-1][-1] is not None:
+        reveal_type(x[-1][-1])  # revealed: int
+```
+
+Mixed positive and negative subscripts:
+
+```py
+def _(x: list[list[int | None]]):
+    if x[0][-1] is not None:
+        reveal_type(x[0][-1])  # revealed: int
+
+    if x[-1][0] is not None:
+        reveal_type(x[-1][0])  # revealed: int
+```
+
+Attribute access combined with negative subscripts:
+
+```py
+class Container:
+    items: list[int | None]
+
+def _(c: Container):
+    if c.items[-1] is not None:
+        reveal_type(c.items[-1])  # revealed: int
+```
+
+Multiple conditions in an `and` chain:
+
+```py
+def _(x: list[int | None]):
+    # Narrowing should persist through `and` chains
+    if x[-1] is not None and x[-1] > 0:
+        reveal_type(x[-1])  # revealed: int
+```
+
+Negative indices with tuples:
+
+```py
+def _(t: tuple[int, str, None] | tuple[None, None, int]):
+    if t[-1] is not None:
+        reveal_type(t)  # revealed: tuple[None, None, int]
+    else:
+        reveal_type(t)  # revealed: tuple[int, str, None]
+
+    if t[-3] is not None:
+        reveal_type(t)  # revealed: tuple[int, str, None]
+```
+
+## Narrowing with explicit positive subscripts
+
+Narrowing should work with explicit positive subscripts like `x[+1]`:
+
+```py
+def _(x: list[int | None]):
+    if x[+0] is not None:
+        reveal_type(x[+0])  # revealed: int
+
+    if x[+1] is not None:
+        reveal_type(x[+1])  # revealed: int
+```
+
+## Narrowing with boolean subscripts
+
+Narrowing should work with boolean subscripts like `x[True]` and `x[False]`. We treat `bool`
+subscripts the same as `int` subscripts because `True` always has the same hash and index value as
+`1`, and `False` always has the same hash and index value as `0`:
+
+```py
+def _(x: tuple[object, object]):
+    if isinstance(x[True], str):
+        reveal_type(x[True])  # revealed: str
+        reveal_type(x[1])  # revealed: str
+
+def _(x: list[int | None]):
+    # x[True] is equivalent to x[1]
+    if x[True] is not None:
+        reveal_type(x[True])  # revealed: int
+
+    # x[False] is equivalent to x[0]
+    if x[False] is not None:
+        reveal_type(x[False])  # revealed: int
+```
+
+Combined with other subscript types:
+
+```py
+def _(x: list[list[int | None]]):
+    if x[True][-1] is not None:
+        reveal_type(x[True][-1])  # revealed: int
+
+    if x[False][0] is not None:
+        reveal_type(x[False][0])  # revealed: int
+```
+
+## Narrowing with bytes literal subscripts
+
+Narrowing should work with bytes literal subscripts like `x[b"key"]`:
+
+```py
+def _(d: dict[bytes, str | None]):
+    if d[b"key"] is not None:
+        reveal_type(d[b"key"])  # revealed: str
+        reveal_type(d[b"other"])  # revealed: str | None
+```
+
+Combined with attribute access:
+
+```py
+class Container:
+    data: dict[bytes, int | None]
+
+def _(c: Container):
+    if c.data[b"key"] is not None:
+        reveal_type(c.data[b"key"])  # revealed: int
 ```

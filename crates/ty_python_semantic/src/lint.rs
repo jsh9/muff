@@ -16,9 +16,6 @@ pub struct LintMetadata {
     pub summary: &'static str,
 
     /// An in depth explanation of the lint in markdown. Covers what the lint does, why it's bad and possible fixes.
-    ///
-    /// The documentation may require post-processing to be rendered correctly. For example, lines
-    /// might have leading or trailing whitespace that should be removed.
     pub raw_documentation: &'static str,
 
     /// The default level of the lint if the user doesn't specify one.
@@ -102,13 +99,23 @@ impl LintMetadata {
         self.summary
     }
 
-    /// Returns the documentation line by line with one leading space and all trailing whitespace removed.
+    /// Returns the documentation line by line with Rust doc-comment prefixes and trailing
+    /// whitespace removed.
     pub fn documentation_lines(&self) -> impl Iterator<Item = &str> {
-        self.raw_documentation.lines().map(|line| {
-            line.strip_prefix(char::is_whitespace)
-                .unwrap_or(line)
-                .trim_end()
-        })
+        let has_doc_comment_prefix = self.raw_documentation.starts_with(' ');
+
+        self.raw_documentation
+            .strip_suffix('\n')
+            .unwrap_or(self.raw_documentation)
+            .lines()
+            .map(move |line| {
+                let line = if has_doc_comment_prefix {
+                    line.strip_prefix(' ').unwrap_or(line)
+                } else {
+                    line
+                };
+                line.trim_end()
+            })
     }
 
     /// Returns the documentation as a single string.
@@ -155,6 +162,11 @@ pub const fn lint_metadata_defaults() -> LintMetadata {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(tag = "type", rename_all = "lowercase")
+)]
 pub enum LintStatus {
     /// The lint has been added to the linter, but is not yet stable.
     Preview {
@@ -244,7 +256,8 @@ impl LintStatus {
 #[macro_export]
 macro_rules! declare_lint {
     (
-        $(#[doc = $doc:literal])+
+        $(#[expect($($expect:tt)*)])?
+        $(#[doc = $doc:expr])+
         $vis: vis static $name: ident = {
             summary: $summary: literal,
             status: $status: expr,
@@ -252,6 +265,7 @@ macro_rules! declare_lint {
             $( $key:ident: $value:expr, )*
         }
     ) => {
+        $(#[expect($($expect)*)])?
         $( #[doc = $doc] )+
         #[expect(clippy::needless_update)]
         $vis static $name: $crate::lint::LintMetadata = $crate::lint::LintMetadata {
@@ -265,6 +279,46 @@ macro_rules! declare_lint {
             ..$crate::lint::lint_metadata_defaults()
         };
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Level, LintStatus};
+
+    crate::declare_lint! {
+        /// First line.
+        ///
+        ///     indented
+        static INLINE_DOCUMENTATION = {
+            summary: "inline documentation",
+            status: LintStatus::preview("0.0.0"),
+            default_level: Level::Error,
+        }
+    }
+
+    crate::declare_lint! {
+        #[doc = include_str!("../resources/lint_docs/invalid-attribute-access.md")]
+        static INCLUDED_DOCUMENTATION = {
+            summary: "included documentation",
+            status: LintStatus::preview("0.0.0"),
+            default_level: Level::Error,
+        }
+    }
+
+    #[test]
+    fn inline_documentation_strips_doc_comment_prefixes() {
+        assert_eq!(
+            INLINE_DOCUMENTATION.documentation(),
+            "First line.\n\n    indented"
+        );
+    }
+
+    #[test]
+    fn included_documentation_preserves_indentation() {
+        let documentation = INCLUDED_DOCUMENTATION.documentation();
+        assert!(documentation.starts_with("## What it does"));
+        assert!(documentation.contains("\n    class_var: ClassVar[int] = 1\n"));
+    }
 }
 
 /// A unique identifier for a lint rule.
@@ -389,11 +443,11 @@ impl LintRegistry {
                     }
                 }
 
-                let suggestion = did_you_mean(self.by_name.keys(), code);
+                let suggestion = did_you_mean(self.by_name.keys().copied(), code);
 
                 Err(GetLintError::Unknown {
                     code: code.to_string(),
-                    suggestion,
+                    suggestion: suggestion.map(str::to_string),
                 })
             }
         }
@@ -419,7 +473,7 @@ impl LintRegistry {
 
     /// Iterates over all removed lints.
     pub fn removed(&self) -> impl Iterator<Item = LintId> + '_ {
-        self.by_name.iter().filter_map(|(_, value)| {
+        self.by_name.values().filter_map(|value| {
             if let LintEntry::Removed(metadata) = value {
                 Some(*metadata)
             } else {

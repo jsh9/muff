@@ -224,7 +224,7 @@ class Foo[T]:
         # revealed: <super: <class 'Foo'>, Foo[T@Foo]>
         reveal_type(super())
 
-    def method3(self: Foo):
+    def method3(self: Foo):  # error: [missing-type-argument]
         # revealed: <super: <class 'Foo'>, Foo[Unknown]>
         reveal_type(super())
 
@@ -307,6 +307,57 @@ class E(enum.Enum):
             case E.X:
                 # revealed: <super: <class 'E'>, E>
                 reveal_type(super())
+```
+
+### Metaclasses
+
+When the second argument to `super()` is a class object, the call can still be valid if that class
+object is an instance of the pivot metaclass. This includes both concrete class objects and
+`type[T]`-style annotations in metaclass methods:
+
+<!-- snapshot-diagnostics -->
+
+```py
+from typing import Any, TypeVar
+
+_TMeta = TypeVar("_TMeta", bound="BaseWithMeta")
+
+class MetaBase(type):
+    meta_base_value: int = 1
+
+    def plain(self: type[_TMeta]) -> type[_TMeta]:
+        return self
+
+class Meta(MetaBase):
+    def __call__(cls: type[_TMeta], *args: Any, **kwargs: Any) -> _TMeta:
+        reveal_type(super(Meta, cls).meta_base_value)  # revealed: int
+        reveal_type(super(Meta, cls).plain())  # revealed: type[_TMeta@__call__]
+        return super().__call__(*args, **kwargs)
+
+class BaseWithMeta(metaclass=Meta):
+    pass
+
+class SubWithMeta(BaseWithMeta):
+    def extra(self) -> int:
+        return 42
+
+reveal_type(SubWithMeta())  # revealed: SubWithMeta
+SubWithMeta().extra()
+reveal_type(super(Meta, BaseWithMeta).meta_base_value)  # revealed: int
+
+class OtherMeta(type):
+    pass
+
+class OtherBase(metaclass=OtherMeta):
+    pass
+
+super(Meta, OtherBase)  # error: [invalid-super-argument]
+
+T = TypeVar("T", bound=int)
+
+class BoundIntMeta(type):
+    def __call__(cls: type[T]) -> T:
+        return super(BoundIntMeta, cls).__call__()  # error: [invalid-super-argument]
 ```
 
 ### Unbound Super Object
@@ -443,6 +494,7 @@ When the owner is a union type, `super()` is built separately for each branch, a
 super objects are combined into a union.
 
 ```py
+from typing import Literal
 from ty_extensions import reveal_mro
 
 class A: ...
@@ -460,12 +512,10 @@ def f(x: C | D):
     s = super(A, x)
     reveal_type(s)  # revealed: <super: <class 'A'>, C> | <super: <class 'A'>, D>
 
-    # error: [possibly-missing-attribute] "Attribute `b` may be missing on object of type `<super: <class 'A'>, C> | <super: <class 'A'>, D>`"
+    # error: [unresolved-attribute] "Attribute `b` is not defined on `<super: <class 'A'>, D>` in union `<super: <class 'A'>, C> | <super: <class 'A'>, D>`"
     s.b
 
-def f(flag: bool):
-    x = str() if flag else str("hello")
-    reveal_type(x)  # revealed: Literal["", "hello"]
+def f(x: Literal["", "hello"]):
     reveal_type(super(str, x))  # revealed: <super: <class 'str'>, str>
 
 def f(x: int | str):
@@ -497,10 +547,10 @@ def f(flag: bool):
 
     reveal_type(s)  # revealed: <super: <class 'B'>, B> | <super: <class 'D'>, D>
 
-    reveal_type(s.x)  # revealed: Unknown | Literal[1, 2]
+    reveal_type(s.x)  # revealed: int
     reveal_type(s.y)  # revealed: int | str
 
-    # error: [possibly-missing-attribute] "Attribute `a` may be missing on object of type `<super: <class 'B'>, B> | <super: <class 'D'>, D>`"
+    # error: [unresolved-attribute] "Attribute `a` is not defined on `<super: <class 'D'>, D>` in union `<super: <class 'B'>, B> | <super: <class 'D'>, D>`"
     reveal_type(s.a)  # revealed: str
 ```
 
@@ -611,21 +661,45 @@ reveal_type(super(B, A))
 reveal_type(super(B, object))
 
 super(object, object()).__class__
+```
 
-# Not all objects valid in a class's bases list are valid as the first argument to `super()`.
-# For example, it's valid to inherit from `typing.ChainMap`, but it's not valid as the first argument to `super()`.
-#
+Not all objects valid in a class's bases list are valid as the first argument to `super()`. For
+example, it's valid to inherit from `typing.ChainMap`, but it's not valid as the first argument to
+`super()`.
+
+```py
 # error: [invalid-super-argument] "`<special-form 'typing.ChainMap'>` is not a valid class"
 reveal_type(super(typing.ChainMap, collections.ChainMap()))  # revealed: Unknown
+```
 
-# Meanwhile, it's not valid to inherit from unsubscripted `typing.Generic`,
-# but it *is* valid as the first argument to `super()`.
-#
+It's not valid to inherit from unsubscripted `typing.Generic` or `typing.Protocol`, but it _is_
+valid as the first argument to `super()`. Still required that it be in the second argument's MRO,
+though:
+
+```py
 # revealed: <super: <special-form 'typing.Generic'>, <class 'SupportsInt'>>
 reveal_type(super(typing.Generic, typing.SupportsInt))
+# error: [invalid-super-argument]
+super(typing.Generic, int)
 
-def _(x: type[typing.Any], y: typing.Any):
+# revealed: <super: <special-form 'typing.Protocol'>, <class 'SupportsInt'>>
+reveal_type(super(typing.Protocol, typing.SupportsInt))
+# error: [invalid-super-argument]
+super(typing.Protocol, int)
+
+def _(x: type[typing.Any], y: typing.Any, z: int):
     reveal_type(super(x, y))  # revealed: <super: Any, Any>
+```
+
+`typing.TypedDict` never appears in the MRO of any class, so it's not valid as the first argument to
+`super()`.
+
+```py
+class TD(typing.TypedDict):
+    x: int
+
+# error: [invalid-super-argument]
+super(typing.TypedDict, TD)
 ```
 
 ### Diagnostic when the invalid type is rendered very verbosely
@@ -639,8 +713,10 @@ def coinflip() -> bool:
 def f():
     if coinflip():
         class A: ...
+
     else:
         class A: ...
+
     super(A, A())  # error: [invalid-super-argument]
 ```
 
@@ -684,6 +760,31 @@ reveal_type(super(B, B()).__getitem__)  # revealed: bound method B.__getitem__(k
 super(B, B())[0]
 ```
 
+### Generic base initializer
+
+A generic base initializer can inherit both its own class's generic context and the subclass's
+generic context. The merged context is not the same as the subclass's enclosing context and should
+not be freshened as a recursive reference.
+
+```py
+from collections.abc import Callable
+from typing import Generic
+from typing_extensions import TypeVar
+
+T = TypeVar("T", bound=BaseException, covariant=True)
+S = TypeVar("S", bound=BaseException, default=BaseException, covariant=True)
+
+class Base(Generic[T]):
+    def __init__(self, check: Callable[[T], bool] | None) -> None:
+        self.check = check
+
+class Child(Base[S], Generic[S]):
+    def __init__(self, check: Callable[[S], bool] | None) -> None:
+        # Regression test: Freshening the merged context made this expect
+        # `Callable[[BaseException], bool]` instead of `Callable[[S], bool]`.
+        super().__init__(check)
+```
+
 ## Subclass Using Concrete Type Instead of `Self`
 
 When a parent class uses `Self` in a parameter type and a subclass overrides it with a concrete
@@ -706,7 +807,7 @@ class Parent:
 
 class Child(Parent):
     def __init__(self, children: Mapping[str, Child] | None = None) -> None:
-        # error: [invalid-argument-type] "Argument to bound method `__init__` is incorrect: Expected `Mapping[str, Self@__init__] | None`, found `Mapping[str, Child] | None`"
+        # error: [invalid-argument-type] "Argument to `Parent.__init__` is incorrect: Expected `Mapping[str, Self@__init__] | None`, found `Mapping[str, Child] | None`"
         super().__init__(children)
 
 # The fix is to use `Self` consistently in the subclass:
@@ -735,6 +836,6 @@ class MyProtocol(Protocol, Generic[_T_co]):
         # Accessing parent's __class_getitem__ through super()
         reveal_type(super())  # revealed: <super: <class 'MyProtocol'>, type[Self@__class_getitem__]>
         parent_method = super().__class_getitem__
-        reveal_type(parent_method)  # revealed: @Todo(super in generic class)
+        reveal_type(parent_method)  # revealed: (item: Unknown, /) -> type[Self@__class_getitem__]
         return parent_method(item)
 ```

@@ -27,7 +27,7 @@ pub struct Cli {
     pub(crate) command: Command,
 }
 
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum Command {
     /// Check a project for type errors.
@@ -37,11 +37,25 @@ pub(crate) enum Command {
     Server,
 
     /// Display ty's version
-    Version,
+    Version {
+        #[arg(
+            long,
+            value_enum,
+            default_value = "text",
+            help = "The format in which to display the version information"
+        )]
+        output_format: HelpFormat,
+    },
 
     /// Generate shell completion
     #[clap(hide = true)]
     GenerateShellCompletion { shell: clap_complete_command::Shell },
+
+    /// Explain rules and other parts of ty
+    Explain {
+        #[command(subcommand)]
+        command: ExplainCommand,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -54,8 +68,12 @@ pub(crate) struct CheckCommand {
     )]
     pub paths: Vec<SystemPathBuf>,
 
-    /// Adds `ty: ignore` comments to suppress all rule diagnostics.
+    /// Apply fixes to resolve errors.
     #[arg(long)]
+    pub(crate) fix: bool,
+
+    /// Adds `ty: ignore` comments to suppress all rule diagnostics.
+    #[arg(long, conflicts_with("fix"))]
     pub(crate) add_ignore: bool,
 
     /// Run the command within the given project directory.
@@ -71,10 +89,16 @@ pub(crate) struct CheckCommand {
     ///
     /// ty uses your Python environment to resolve third-party imports in your code.
     ///
+    /// This can be a path to:
+    ///
+    /// - A Python interpreter, e.g. `.venv/bin/python3`
+    /// - A virtual environment directory, e.g. `.venv`
+    /// - A system Python [`sys.prefix`] directory, e.g. `/usr`
+    ///
     /// If you're using a project management tool such as uv or you have an activated Conda or virtual
     /// environment, you should not generally need to specify this option.
     ///
-    /// This option can be used to point to virtual or system Python environments.
+    /// [`sys.prefix`]: https://docs.python.org/3/library/sys.html#sys.prefix
     #[arg(long, value_name = "PATH", alias = "venv")]
     pub(crate) python: Option<SystemPathBuf>,
 
@@ -102,7 +126,7 @@ pub(crate) struct CheckCommand {
     /// 2. Check for an activated or configured Python environment
     ///    and attempt to infer the Python version of that environment
     /// 3. Fall back to the latest stable Python version supported by ty (see `ty check --help` output)
-    #[arg(long, value_name = "VERSION", alias = "target-version")]
+    #[arg(long, value_name = "VERSION", alias = "target-version", value_enum)]
     pub(crate) python_version: Option<PythonVersion>,
 
     /// Target platform to assume when resolving types.
@@ -130,7 +154,7 @@ pub(crate) struct CheckCommand {
     pub(crate) config_file: Option<SystemPathBuf>,
 
     /// The format to use for printing diagnostic messages.
-    #[arg(long)]
+    #[arg(long, env = EnvVars::TY_OUTPUT_FORMAT)]
     pub(crate) output_format: Option<OutputFormat>,
 
     /// Use exit code 1 if there are any warning-level diagnostics.
@@ -218,9 +242,7 @@ impl CheckCommand {
             .or(self.respect_ignore_files);
         let options = Options {
             environment: Some(EnvironmentOptions {
-                python_version: self
-                    .python_version
-                    .map(|version| RangedValue::cli(version.into())),
+                python_version: self.python_version.map(Into::into).map(RangedValue::cli),
                 python_platform: self
                     .python_platform
                     .map(|platform| RangedValue::cli(platform.into())),
@@ -315,7 +337,7 @@ impl clap::Args for RulesArg {
             clap::Arg::new("error")
                 .long("error")
                 .action(ArgAction::Append)
-                .help("Treat the given rule as having severity 'error'. Can be specified multiple times.")
+                .help("Treat the given rule as having severity 'error'. Can be specified multiple times. Use 'all' to apply to all rules.")
                 .value_name("RULE")
                 .help_heading(HELP_HEADING),
         )
@@ -323,7 +345,7 @@ impl clap::Args for RulesArg {
             clap::Arg::new("warn")
                 .long("warn")
                 .action(ArgAction::Append)
-                .help("Treat the given rule as having severity 'warn'. Can be specified multiple times.")
+                .help("Treat the given rule as having severity 'warn'. Can be specified multiple times. Use 'all' to apply to all rules.")
                 .value_name("RULE")
                 .help_heading(HELP_HEADING),
         )
@@ -331,7 +353,7 @@ impl clap::Args for RulesArg {
             clap::Arg::new("ignore")
                 .long("ignore")
                 .action(ArgAction::Append)
-                .help("Disables the rule. Can be specified multiple times.")
+                .help("Disables the rule. Can be specified multiple times. Use 'all' to apply to all rules.")
                 .value_name("RULE")
                 .help_heading(HELP_HEADING),
         )
@@ -363,9 +385,12 @@ pub enum OutputFormat {
     /// Print diagnostics in the JSON format expected by GitLab Code Quality reports.
     #[value(name = "gitlab")]
     Gitlab,
-    #[value(name = "github")]
     /// Print diagnostics in the format used by GitHub Actions workflow error annotations.
+    #[value(name = "github")]
     Github,
+    /// Print diagnostics as a JUnit-style XML report.
+    #[value(name = "junit")]
+    Junit,
 }
 
 impl From<OutputFormat> for ty_project::metadata::options::OutputFormat {
@@ -375,6 +400,7 @@ impl From<OutputFormat> for ty_project::metadata::options::OutputFormat {
             OutputFormat::Concise => Self::Concise,
             OutputFormat::Gitlab => Self::Gitlab,
             OutputFormat::Github => Self::Github,
+            OutputFormat::Junit => Self::Junit,
         }
     }
 }
@@ -391,6 +417,12 @@ pub(crate) enum TerminalColor {
 
     /// Never display colors.
     Never,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum HelpFormat {
+    Text,
+    Json,
 }
 
 /// A TOML `<KEY> = <VALUE>` pair
@@ -453,6 +485,22 @@ impl ConfigsArg {
     pub(crate) fn into_options(self) -> Option<Options> {
         self.0
     }
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub(crate) enum ExplainCommand {
+    /// Explain a rule (or all rules).
+    Rule {
+        /// Rule to explain
+        ///
+        /// Defaults to all rules if omitted.
+        #[arg(hide_possible_values = true)]
+        rule: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value = "text")]
+        output_format: HelpFormat,
+    },
 }
 
 fn resolve_bool_arg(yes: bool, no: bool) -> Option<bool> {

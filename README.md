@@ -89,7 +89,7 @@ An extremely fast Python linter and code formatter, written in Rust.
 - ⚖️ Drop-in parity with [Flake8](https://docs.astral.sh/ruff/faq/#how-does-ruffs-linter-compare-to-flake8), isort, and [Black](https://docs.astral.sh/ruff/faq/#how-does-ruffs-formatter-compare-to-black)
 - 📦 Built-in caching, to avoid re-analyzing unchanged files
 - 🔧 Fix support, for automatic error correction (e.g., automatically remove unused imports)
-- 📏 Over [800 built-in rules](https://docs.astral.sh/ruff/rules/), with native re-implementations
+- 📏 Over [900 built-in rules](https://docs.astral.sh/ruff/rules/), with native re-implementations
     of popular Flake8 plugins, like flake8-bugbear
 - ⌨️ First-party [editor integrations](https://docs.astral.sh/ruff/editors) for [VS Code](https://github.com/astral-sh/ruff-vscode) and [more](https://docs.astral.sh/ruff/editors/setup)
 - 🌎 Monorepo-friendly, with [hierarchical and cascading configuration](https://docs.astral.sh/ruff/configuration/#config-file-discovery)
@@ -117,8 +117,10 @@ Ruff is extremely actively developed and used in major open-source projects like
 Ruff is backed by [Astral](https://astral.sh), the creators of
 [uv](https://github.com/astral-sh/uv) and [ty](https://github.com/astral-sh/ty).
 
-Read the [launch post](https://astral.sh/blog/announcing-astral-the-company-behind-ruff), or the
-original [project announcement](https://notes.crmarsh.com/python-tooling-could-be-much-much-faster).
+Read the [launch
+post](https://astral.sh/blog/announcing-astral-the-company-behind-ruff), or the
+original [project
+announcement](https://notes.crmarsh.com/python-tooling-could-be-much-much-faster).
 
 ## Testimonials
 
@@ -207,8 +209,8 @@ curl -LsSf https://astral.sh/ruff/install.sh | sh
 powershell -c "irm https://astral.sh/ruff/install.ps1 | iex"
 
 # For a specific version.
-curl -LsSf https://astral.sh/ruff/0.14.11/install.sh | sh
-powershell -c "irm https://astral.sh/ruff/0.14.11/install.ps1 | iex"
+curl -LsSf https://astral.sh/ruff/0.15.18/install.sh | sh
+powershell -c "irm https://astral.sh/ruff/0.15.18/install.ps1 | iex"
 ```
 
 You can also install Ruff via [Homebrew](https://formulae.brew.sh/formula/ruff), [Conda](https://anaconda.org/conda-forge/ruff),
@@ -241,7 +243,7 @@ Ruff can also be used as a [pre-commit](https://pre-commit.com/) hook via [`ruff
 ```yaml
 - repo: https://github.com/astral-sh/ruff-pre-commit
   # Ruff version.
-  rev: v0.14.11
+  rev: v0.15.18
   hooks:
     # Run the linter.
     - id: ruff-check
@@ -309,8 +311,8 @@ exclude = [
 line-length = 88
 indent-width = 4
 
-# Assume Python 3.9
-target-version = "py39"
+# Assume Python 3.10
+target-version = "py310"
 
 [lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
@@ -355,7 +357,7 @@ ruff check --config "lint.per-file-ignores = {'some_file.py' = ['F841']}"
 ```
 
 To opt in to the latest lint rules, formatter style changes, interface updates, and more, enable
-[preview mode](https://docs.astral.sh/ruff/rules/) by setting `preview = true` in your configuration
+[preview mode](https://docs.astral.sh/ruff/preview/) by setting `preview = true` in your configuration
 file or passing `--preview` on the command line. Preview mode enables a collection of unstable
 features that may change prior to stabilization.
 
@@ -366,7 +368,7 @@ for more on the linting and formatting commands, respectively.
 
 <!-- Begin section: Rules -->
 
-**Ruff supports over 800 lint rules**, many of which are inspired by popular tools like Flake8,
+**Ruff supports over 900 lint rules**, many of which are inspired by popular tools like Flake8,
 isort, pyupgrade, and others. Regardless of the rule's origin, Ruff re-implements every rule in
 Rust as a first-party feature.
 
@@ -376,6 +378,12 @@ stylistic rules that overlap with the use of a formatter, like `ruff format` or
 
 If you're just getting started with Ruff, **the default rule set is a great place to start**: it
 catches a wide variety of common errors (like unused imports) with zero configuration.
+
+In [preview](https://docs.astral.sh/ruff/preview/), Ruff enables an expanded set of default rules
+that includes rules from the `B`, `UP`, and `RUF` categories, as well as many more. If you give the
+new defaults a try, feel free to leave feedback in the [GitHub
+discussion](https://github.com/astral-sh/ruff/discussions/23203), where you can also find the new
+rule set listed in full.
 
 <!-- End section: Rules -->
 

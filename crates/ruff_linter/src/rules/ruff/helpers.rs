@@ -204,7 +204,7 @@ pub(super) fn has_default_copy_semantics(
     class_def: &ast::StmtClassDef,
     semantic: &SemanticModel,
 ) -> bool {
-    analyze::class::any_qualified_base_class(class_def, semantic, &|qualified_name| {
+    analyze::class::any_qualified_base_class(class_def, semantic, |qualified_name| {
         matches!(
             qualified_name.segments(),
             [
@@ -241,4 +241,24 @@ pub(super) fn is_descriptor_class(func: &Expr, semantic: &SemanticModel) -> bool
                 .is_some_and(|id| semantic.binding(id).kind.is_function_definition())
         })
     })
+}
+
+/// Returns `true` if the class has `ctypes.Structure` as a base
+/// and the first target is the `_fields_` attribute.
+pub(super) fn is_ctypes_structure_fields(
+    class_def: &ast::StmtClassDef,
+    semantic: &SemanticModel,
+    targets: &[Expr],
+) -> bool {
+    let is_ctypes_structure =
+        analyze::class::any_qualified_base_class(class_def, semantic, |qualified_name| {
+            matches!(qualified_name.segments(), ["ctypes", "Structure"])
+        });
+
+    let is_fields = matches!(
+        targets.first(),
+        Some(Expr::Name(ast::ExprName { id, .. })) if id == "_fields_"
+    );
+
+    is_ctypes_structure && is_fields
 }

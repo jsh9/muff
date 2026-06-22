@@ -42,6 +42,61 @@ def _(x: Literal["a", "b", "c", 1]):
         reveal_type(x)  # revealed: Literal[1]
 ```
 
+## `in` for PEP 695 aliases
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Literal, assert_never
+
+type Foo = Literal["a", "b", "c", "d"]
+
+def _(x: Foo):
+    if x in ("a", "b"):
+        reveal_type(x)  # revealed: Literal["a", "b"]
+    else:
+        reveal_type(x)  # revealed: Literal["c", "d"]
+
+def _(x: Foo) -> str:
+    if x in ("a", "b"):
+        return "AB"
+    match x:
+        case "c":
+            return "C"
+        case "d":
+            return "D"
+        case _ as never:
+            assert_never(never)
+```
+
+## `in` for mixed PEP 695 aliases
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Literal
+
+type Foo = Literal["a", "b", "c"] | int
+
+def _(x: Foo):
+    if x in ("a", "b"):
+        reveal_type(x)  # revealed: Literal["a", "b"] | int
+    else:
+        reveal_type(x)  # revealed: Literal["c"] | int
+
+def _(x: Foo):
+    if x not in ("a", "c"):
+        reveal_type(x)  # revealed: Literal["b"] | int
+    else:
+        reveal_type(x)  # revealed: Literal["a", "c"] | int
+```
+
 ## `in` for `str` and literal strings
 
 ```py
@@ -110,7 +165,7 @@ def test(x: Literal["a", "b", "c"] | None | int = None):
 ## Direct `not in` conditional
 
 ```py
-from typing import Literal
+from typing import Any, Literal
 
 def test(x: Literal["a", "b", "c"] | None | int = None):
     if x not in ("a", "c"):
@@ -119,6 +174,72 @@ def test(x: Literal["a", "b", "c"] | None | int = None):
         reveal_type(x)  # revealed: Literal["b"] | None | int
     else:
         reveal_type(x)  # revealed: Literal["a", "c"] | int
+
+def broad_set_element(x: Literal[1, 2], values: set[int]) -> None:
+    if x not in values:
+        reveal_type(x)  # revealed: Literal[1, 2]
+    else:
+        reveal_type(x)  # revealed: Literal[1, 2]
+
+def union_tuple_slot(x: Literal[1, 2], values: tuple[Literal[1, 2]]) -> None:
+    if x not in values:
+        reveal_type(x)  # revealed: Literal[1, 2]
+    else:
+        reveal_type(x)  # revealed: Literal[1, 2]
+
+def union_tuple_slot_with_exact_value(
+    x: Literal[1, 2, 3],
+    values: tuple[Literal[1, 2], Literal[3]],
+) -> None:
+    if x not in values:
+        reveal_type(x)  # revealed: Literal[1, 2]
+    else:
+        reveal_type(x)  # revealed: Literal[1, 2, 3]
+
+def tuple_with_any_slot(x: str | None, missing: Any) -> None:
+    if x not in (missing, None):
+        reveal_type(x)  # revealed: str
+    else:
+        reveal_type(x)  # revealed: str | None
+
+def local_literal_rhs(x: str | None) -> None:
+    unavailable = [None, ""]
+    if x not in unavailable:
+        # TODO: This should narrow to `str` if we can prove that the local
+        # literal collection has not been mutated or aliased before the test.
+        reveal_type(x)  # revealed: str | None
+    else:
+        reveal_type(x)  # revealed: None | str
+
+def mutable_global_rhs(x: str | None, unavailable: set[str | None]) -> None:
+    if x not in unavailable:
+        reveal_type(x)  # revealed: str | None
+    else:
+        reveal_type(x)  # revealed: str | None
+```
+
+## No present-key narrowing without a `TypedDict`
+
+We only synthesize a key-access protocol for string membership tests on right-hand-side values that
+include a `TypedDict`. Other membership tests can mean substring or element containment instead:
+
+```py
+from typing import Literal
+
+def f(x: Literal["abc", "def"]):
+    if "a" in x:
+        # `x` could also be validly narrowed to `Literal["abc"]` here:
+        reveal_type(x)  # revealed: Literal["abc", "def"]
+    else:
+        # `x` could also be validly narrowed to `Literal["def"]` here:
+        reveal_type(x)  # revealed: Literal["abc", "def"]
+
+    if "a" not in x:
+        # `x` could also be validly narrowed to `Literal["def"]` here:
+        reveal_type(x)  # revealed: Literal["abc", "def"]
+    else:
+        # `x` could also be validly narrowed to `Literal["abc"]` here:
+        reveal_type(x)  # revealed: Literal["abc", "def"]
 ```
 
 ## bool
@@ -171,6 +292,22 @@ def _(x: Color):
         reveal_type(x)  # revealed: Literal[Color.RED, Color.GREEN]
     else:
         reveal_type(x)  # revealed: Literal[Color.BLUE]
+
+def after_excluding_red(x: Color):
+    if x is Color.RED:
+        return
+    if x in (Color.GREEN,):
+        reveal_type(x)  # revealed: Literal[Color.GREEN]
+    else:
+        reveal_type(x)  # revealed: Literal[Color.BLUE]
+
+def after_excluding_red_mixed(x: Color | int):
+    if x is Color.RED:
+        return
+    if x in (Color.GREEN,):
+        reveal_type(x)  # revealed: Literal[Color.GREEN] | int
+    else:
+        reveal_type(x)  # revealed: Literal[Color.BLUE] | int
 ```
 
 ## Union with enum and `int`

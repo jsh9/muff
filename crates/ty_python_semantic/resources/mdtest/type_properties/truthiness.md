@@ -58,7 +58,7 @@ Checks that we don't get into a cycle if someone sets their `__bool__` method to
 class BoolIsBool:
     __bool__ = bool
 
-reveal_type(bool(BoolIsBool()))  # revealed: bool
+reveal_type(bool(BoolIsBool()))  # revealed: Literal[False]
 ```
 
 ### Conditional __bool__ method
@@ -124,9 +124,9 @@ static_assert(is_subtype_of(types.WrapperDescriptorType, AlwaysTruthy))
 ### `Callable` types always have ambiguous truthiness
 
 ```py
-from typing import Callable
+from typing import Any, Callable
 
-def f(x: Callable, y: Callable[[int], str]):
+def f(x: Callable[..., Any], y: Callable[[int], str]):
     reveal_type(bool(x))  # revealed: bool
     reveal_type(bool(y))  # revealed: bool
 ```
@@ -186,6 +186,11 @@ class CustomLenEnum(Enum):
 reveal_type(bool(NormalEnum.NO))  # revealed: Literal[True]
 reveal_type(bool(NormalEnum.YES))  # revealed: Literal[True]
 
+def normal_enum_complement(value: NormalEnum):
+    if value is NormalEnum.NO:
+        return
+    reveal_type(bool(value))  # revealed: Literal[True]
+
 reveal_type(bool(FalsyEnum.NO))  # revealed: Literal[False]
 reveal_type(bool(FalsyEnum.YES))  # revealed: Literal[False]
 
@@ -221,15 +226,14 @@ class Normal(TypedDict):
     b: int
 
 def _(n: Normal) -> None:
-    # Could be `Literal[True]`
-    reveal_type(bool(n))  # revealed: bool
+    reveal_type(bool(n))  # revealed: Literal[True]
 
 class OnlyFalsyItems(TypedDict):
     wrong: Literal[False]
 
 def _(n: OnlyFalsyItems) -> None:
-    # Could be `Literal[True]` (it does not matter if all items are falsy)
-    reveal_type(bool(n))  # revealed: bool
+    # (it does not matter if all items are falsy)
+    reveal_type(bool(n))  # revealed: Literal[True]
 
 class Empty(TypedDict):
     pass

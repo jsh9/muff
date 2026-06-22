@@ -11,8 +11,8 @@ ISC004 [*] Unparenthesized implicit string concatenation in collection
   | |______________________________________________________________^
 6 |   )
   |
-help: Wrap implicitly concatenated strings in parentheses
 help: Did you forget a comma?
+help: Wrap implicitly concatenated strings in parentheses
 1 | facts = (
 2 |     "Lobsters have blue blood.",
 3 |     "The liver is the only human organ that can fully regenerate itself.",
@@ -21,7 +21,7 @@ help: Did you forget a comma?
 4 +     ("Clarinets are made almost entirely out of wood from the mpingo tree."
 5 +     "In 1971, astronaut Alan Shepard played golf on the moon."),
 6 | )
-7 | 
+7 |
 8 | facts = [
 note: This is an unsafe fix and may change runtime behavior
 
@@ -35,8 +35,8 @@ ISC004 [*] Unparenthesized implicit string concatenation in collection
    | |______________________________________________________________^
 13 |   ]
    |
-help: Wrap implicitly concatenated strings in parentheses
 help: Did you forget a comma?
+help: Wrap implicitly concatenated strings in parentheses
 8  | facts = [
 9  |     "Lobsters have blue blood.",
 10 |     "The liver is the only human organ that can fully regenerate itself.",
@@ -45,7 +45,7 @@ help: Did you forget a comma?
 11 +     ("Clarinets are made almost entirely out of wood from the mpingo tree."
 12 +     "In 1971, astronaut Alan Shepard played golf on the moon."),
 13 | ]
-14 | 
+14 |
 15 | facts = {
 note: This is an unsafe fix and may change runtime behavior
 
@@ -59,8 +59,8 @@ ISC004 [*] Unparenthesized implicit string concatenation in collection
    | |______________________________________________________________^
 20 |   }
    |
-help: Wrap implicitly concatenated strings in parentheses
 help: Did you forget a comma?
+help: Wrap implicitly concatenated strings in parentheses
 15 | facts = {
 16 |     "Lobsters have blue blood.",
 17 |     "The liver is the only human organ that can fully regenerate itself.",
@@ -69,7 +69,7 @@ help: Did you forget a comma?
 18 +     ("Clarinets are made almost entirely out of wood from the mpingo tree."
 19 +     "In 1971, astronaut Alan Shepard played golf on the moon."),
 20 | }
-21 | 
+21 |
 22 | facts = {
 note: This is an unsafe fix and may change runtime behavior
 
@@ -83,10 +83,10 @@ ISC004 [*] Unparenthesized implicit string concatenation in collection
    | |_________________________^
 33 |   )
    |
-help: Wrap implicitly concatenated strings in parentheses
 help: Did you forget a comma?
+help: Wrap implicitly concatenated strings in parentheses
 27 | }
-28 | 
+28 |
 29 | facts = (
    -     "Octopuses have three hearts."
 30 +     ("Octopuses have three hearts."
@@ -94,7 +94,7 @@ help: Did you forget a comma?
    -     "Honey never spoils.",
 32 +     "Honey never spoils."),
 33 | )
-34 | 
+34 |
 35 | facts = [
 note: This is an unsafe fix and may change runtime behavior
 
@@ -108,10 +108,10 @@ ISC004 [*] Unparenthesized implicit string concatenation in collection
    | |_________________________^
 39 |   ]
    |
-help: Wrap implicitly concatenated strings in parentheses
 help: Did you forget a comma?
+help: Wrap implicitly concatenated strings in parentheses
 33 | )
-34 | 
+34 |
 35 | facts = [
    -     "Octopuses have three hearts."
 36 +     ("Octopuses have three hearts."
@@ -119,7 +119,7 @@ help: Did you forget a comma?
    -     "Honey never spoils.",
 38 +     "Honey never spoils."),
 39 | ]
-40 | 
+40 |
 41 | facts = {
 note: This is an unsafe fix and may change runtime behavior
 
@@ -133,10 +133,10 @@ ISC004 [*] Unparenthesized implicit string concatenation in collection
    | |_________________________^
 45 |   }
    |
-help: Wrap implicitly concatenated strings in parentheses
 help: Did you forget a comma?
+help: Wrap implicitly concatenated strings in parentheses
 39 | ]
-40 | 
+40 |
 41 | facts = {
    -     "Octopuses have three hearts."
 42 +     ("Octopuses have three hearts."
@@ -144,6 +144,6 @@ help: Did you forget a comma?
    -     "Honey never spoils.",
 44 +     "Honey never spoils."),
 45 | }
-46 | 
+46 |
 47 | facts = (
 note: This is an unsafe fix and may change runtime behavior

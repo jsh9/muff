@@ -43,7 +43,8 @@ pub struct GlobalConfigArgs {
     /// Either a path to a TOML configuration file (`pyproject.toml` or `ruff.toml`),
     /// or a TOML `<KEY> = <VALUE>` pair
     /// (such as you might find in a `ruff.toml` configuration file)
-    /// overriding a specific configuration option.
+    /// overriding a specific configuration option
+    /// (e.g., `--config "lint.line-length = 100"` or `--config "format.quote-style = 'single'"`).
     /// Overrides of individual settings using this option always take precedence
     /// over all configuration files, including configuration files that were also
     /// specified using `--config`.
@@ -67,6 +68,15 @@ pub struct GlobalConfigArgs {
     // we emit an error later on, after the initial parsing by clap.
     #[arg(long, help_heading = "Global options", global = true)]
     pub isolated: bool,
+
+    /// Control when colored output is used.
+    #[arg(
+        long,
+        value_name = "WHEN",
+        help_heading = "Global options",
+        global = true
+    )]
+    pub(crate) color: Option<TerminalColor>,
 }
 
 impl GlobalConfigArgs {
@@ -78,6 +88,20 @@ impl GlobalConfigArgs {
     fn partition(self) -> (LogLevel, Vec<SingleConfigArgument>, bool) {
         (self.log_level(), self.config, self.isolated)
     }
+}
+
+/// Control when colored output is used.
+#[derive(Copy, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord, Default, clap::ValueEnum)]
+pub(crate) enum TerminalColor {
+    /// Display colors if the output goes to an interactive terminal.
+    #[default]
+    Auto,
+
+    /// Always display colors.
+    Always,
+
+    /// Never display colors.
+    Never,
 }
 
 // Configures Clap v3-style help menu colors
@@ -207,7 +231,7 @@ pub struct AnalyzeGraphCommand {
 #[expect(clippy::struct_excessive_bools)]
 pub struct CheckCommand {
     /// List of files or directories to check.
-    #[clap(help = "List of files or directories to check [default: .]")]
+    #[clap(help = "List of files or directories to check, or `-` to read from stdin [default: .]")]
     pub files: Vec<PathBuf>,
     /// Apply fixes to resolve lint violations.
     /// Use `--no-fix` to disable or `--unsafe-fixes` to include unsafe fixes.
@@ -475,7 +499,9 @@ pub struct CheckCommand {
 #[expect(clippy::struct_excessive_bools)]
 pub struct FormatCommand {
     /// List of files or directories to format.
-    #[clap(help = "List of files or directories to format [default: .]")]
+    #[clap(
+        help = "List of files or directories to format, or `-` to read from stdin [default: .]"
+    )]
     pub files: Vec<PathBuf>,
     /// Avoid writing any formatted files back; instead, exit with a non-zero status code if any
     /// files would have been modified, and zero otherwise.

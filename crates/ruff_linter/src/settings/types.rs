@@ -16,7 +16,7 @@ use strum_macros::EnumIter;
 
 use ruff_cache::{CacheKey, CacheKeyHasher};
 use ruff_macros::CacheKey;
-use ruff_python_ast::{self as ast, PySourceType};
+use ruff_python_ast::{self as ast, PySourceType, SourceType};
 
 use crate::Applicability;
 use crate::registry::RuleSet;
@@ -200,6 +200,7 @@ impl Deref for GlobPath {
 #[derive(Debug, Clone, CacheKey, PartialEq, PartialOrd, Eq, Ord)]
 pub enum FilePattern {
     Builtin(&'static str),
+    Config(String),
     User(String, GlobPath),
 }
 
@@ -208,6 +209,9 @@ impl FilePattern {
         match self {
             FilePattern::Builtin(pattern) => {
                 builder.add(Glob::from_str(pattern)?);
+            }
+            FilePattern::Config(pattern) => {
+                builder.add(Glob::new(&pattern)?);
             }
             FilePattern::User(pattern, absolute) => {
                 // Add the absolute path.
@@ -230,7 +234,7 @@ impl Display for FilePattern {
             "{:?}",
             match self {
                 Self::Builtin(pattern) => pattern,
-                Self::User(pattern, _) => pattern.as_str(),
+                Self::User(pattern, _) | Self::Config(pattern) => pattern.as_str(),
             }
         )
     }
@@ -428,6 +432,7 @@ pub enum Language {
     Python,
     Pyi,
     Ipynb,
+    Markdown,
 }
 
 impl FromStr for Language {
@@ -438,6 +443,7 @@ impl FromStr for Language {
             "python" => Ok(Self::Python),
             "pyi" => Ok(Self::Pyi),
             "ipynb" => Ok(Self::Ipynb),
+            "md" => Ok(Self::Markdown),
             _ => {
                 bail!("Unrecognized language: `{s}`. Expected one of `python`, `pyi`, or `ipynb`.")
             }
@@ -445,12 +451,13 @@ impl FromStr for Language {
     }
 }
 
-impl From<Language> for PySourceType {
+impl From<Language> for SourceType {
     fn from(value: Language) -> Self {
         match value {
-            Language::Python => Self::Python,
-            Language::Ipynb => Self::Ipynb,
-            Language::Pyi => Self::Stub,
+            Language::Python => Self::Python(PySourceType::Python),
+            Language::Ipynb => Self::Python(PySourceType::Ipynb),
+            Language::Pyi => Self::Python(PySourceType::Stub),
+            Language::Markdown => Self::Markdown,
         }
     }
 }
@@ -495,10 +502,36 @@ impl From<ExtensionPair> for (String, Language) {
 pub struct ExtensionMapping(FxHashMap<String, Language>);
 
 impl ExtensionMapping {
+    /// Return the file extensions in the mapping.
+    pub fn extensions(&self) -> impl Iterator<Item = &String> {
+        self.0.keys()
+    }
+
     /// Return the [`Language`] for the given file.
     pub fn get(&self, path: &Path) -> Option<Language> {
         let ext = path.extension()?.to_str()?;
         self.0.get(ext).copied()
+    }
+
+    /// Return the [`Language`] for a given file extension.
+    pub fn get_extension(&self, ext: &str) -> Option<Language> {
+        self.0.get(ext).copied()
+    }
+
+    /// Return a mapped [`SourceType`] for a given path.
+    pub fn get_source_type(&self, path: &Path) -> SourceType {
+        match self.get(path) {
+            None => SourceType::from(path),
+            Some(language) => SourceType::from(language),
+        }
+    }
+
+    /// Return a mapped [`SourceType`] for a given file extension.
+    pub fn get_source_type_by_extension(&self, ext: &str) -> SourceType {
+        match self.get_extension(ext) {
+            None => SourceType::from_extension(ext),
+            Some(language) => SourceType::from(language),
+        }
     }
 }
 
@@ -573,7 +606,6 @@ impl Display for OutputFormat {
 
 /// The subset of output formats only implemented in Ruff, not in `ruff_db` via `DisplayDiagnostics`.
 pub enum RuffOutputFormat {
-    Github,
     Grouped,
     Sarif,
 }
@@ -592,7 +624,7 @@ impl TryFrom<OutputFormat> for DiagnosticFormat {
             OutputFormat::Pylint => Ok(DiagnosticFormat::Pylint),
             OutputFormat::Rdjson => Ok(DiagnosticFormat::Rdjson),
             OutputFormat::Azure => Ok(DiagnosticFormat::Azure),
-            OutputFormat::Github => Err(RuffOutputFormat::Github),
+            OutputFormat::Github => Ok(DiagnosticFormat::Github),
             OutputFormat::Grouped => Err(RuffOutputFormat::Grouped),
             OutputFormat::Sarif => Err(RuffOutputFormat::Sarif),
         }
@@ -661,7 +693,53 @@ impl Display for RequiredVersion {
 /// For reference pep8-naming uses
 /// [`fnmatch`](https://docs.python.org/3/library/fnmatch.html) for
 /// pattern matching.
-pub type IdentifierPattern = glob::Pattern;
+///
+/// Literal patterns without glob metacharacters fall back on string
+/// comparison to avoid the overhead of constructing a [`glob::Pattern`].
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, CacheKey)]
+pub enum IdentifierPattern {
+    Literal(String),
+    Glob(Box<glob::Pattern>),
+}
+
+impl IdentifierPattern {
+    pub fn new(pattern: &str) -> Result<Self, glob::PatternError> {
+        // `]` is only special inside `[...]`, which necessarily includes `[`.
+        if pattern.contains(['?', '*', '[']) {
+            Ok(Self::Glob(Box::new(glob::Pattern::new(pattern)?)))
+        } else {
+            Ok(Self::Literal(pattern.to_string()))
+        }
+    }
+
+    pub fn matches(&self, candidate: &str) -> bool {
+        match self {
+            Self::Literal(literal) => literal == candidate,
+            Self::Glob(pattern) => pattern.matches(candidate),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Literal(literal) => literal,
+            Self::Glob(pattern) => pattern.as_str(),
+        }
+    }
+}
+
+impl Display for IdentifierPattern {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for IdentifierPattern {
+    type Err = glob::PatternError;
+
+    fn from_str(pattern: &str) -> Result<Self, Self::Err> {
+        Self::new(pattern)
+    }
+}
 
 /// Like [`PerFile`] but with string globs compiled to [`GlobMatcher`]s for more efficient usage.
 #[derive(Debug, Clone)]
@@ -911,8 +989,32 @@ impl Display for CompiledPerFileTargetVersionList {
 
 #[cfg(test)]
 mod tests {
+    use super::IdentifierPattern;
+
     #[test]
     fn default_python_version_works() {
         super::PythonVersion::default();
+    }
+
+    #[test]
+    fn identifier_pattern_matches_literals_exactly() {
+        let pattern = IdentifierPattern::new("package.module").unwrap();
+
+        assert!(pattern.matches("package.module"));
+        assert!(!pattern.matches("package"));
+        assert!(!pattern.matches("package.module.extra"));
+    }
+
+    #[test]
+    fn identifier_pattern_preserves_glob_matching() {
+        let pattern = IdentifierPattern::new("package.*").unwrap();
+
+        assert!(pattern.matches("package.module"));
+        assert!(!pattern.matches("other.module"));
+    }
+
+    #[test]
+    fn identifier_pattern_rejects_invalid_globs() {
+        assert!(IdentifierPattern::new("package[").is_err());
     }
 }

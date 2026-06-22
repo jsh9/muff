@@ -46,6 +46,36 @@ except MyExc as e:
     reveal_type(e)  # revealed: Exception
 ```
 
+## Can be (partially) stringified
+
+```py
+from typing import TypeAlias, Optional, TypeVar, Generic
+
+class A: ...
+
+OptionalA1: TypeAlias = Optional[A]
+OptionalA2: TypeAlias = Optional["A"]
+OptionalA3: TypeAlias = "Optional[A]"
+
+def _(a: OptionalA1, b: OptionalA2, c: OptionalA3) -> None:
+    reveal_type(a)  # revealed: A | None
+    reveal_type(b)  # revealed: A | None
+    reveal_type(c)  # revealed: A | None
+
+T = TypeVar("T")
+
+class MyGenericClass(Generic[T]): ...
+
+MyGenericAlias1: TypeAlias = MyGenericClass[A]
+MyGenericAlias2: TypeAlias = MyGenericClass["A"]
+MyGenericAlias3: TypeAlias = "MyGenericClass[A]"
+
+def _(a: MyGenericAlias1, b: MyGenericAlias2, c: MyGenericAlias3) -> None:
+    reveal_type(a)  # revealed: MyGenericClass[A]
+    reveal_type(b)  # revealed: MyGenericClass[A]
+    reveal_type(c)  # revealed: MyGenericClass[A]
+```
+
 ## Can inherit from an alias
 
 ```py
@@ -207,8 +237,14 @@ from typing_extensions import Callable, Concatenate, TypeAliasType
 MyAlias4: TypeAlias = Callable[Concatenate[dict[str, T], ...], list[U]]
 
 def _(c: MyAlias4[int, str]):
-    # TODO: should be (int, / ...) -> str
-    reveal_type(c)  # revealed: Unknown
+    reveal_type(c)  # revealed: (dict[str, int], /, *args: Any, **kwargs: Any) -> list[str]
+```
+
+## Explicit aliases using `TypeAliasType`
+
+```py
+from typing import TypeAlias, TypeVar
+from typing_extensions import Callable, Concatenate, TypeAliasType
 
 T = TypeVar("T")
 
@@ -240,8 +276,7 @@ def _(x: ListOrDict[int]):
 MyAlias7: TypeAlias = Callable[Concatenate[T, ...], None]
 
 def _(c: MyAlias7[int]):
-    # TODO: should be (int, / ...) -> None
-    reveal_type(c)  # revealed: Unknown
+    reveal_type(c)  # revealed: (int, /, *args: Any, **kwargs: Any) -> None
 ```
 
 ## Imported
@@ -280,13 +315,13 @@ def _(x: IntOrStr):
 from typing import TypeAlias, TypeVar, Union
 from types import UnionType
 
-RecursiveTuple: TypeAlias = tuple[int | "RecursiveTuple", str]
+RecursiveTuple: TypeAlias = tuple["int | RecursiveTuple", str]
 
 def _(rec: RecursiveTuple):
     # TODO should be `tuple[int | RecursiveTuple, str]`
     reveal_type(rec)  # revealed: tuple[Divergent, str]
 
-RecursiveHomogeneousTuple: TypeAlias = tuple[int | "RecursiveHomogeneousTuple", ...]
+RecursiveHomogeneousTuple: TypeAlias = tuple["int | RecursiveHomogeneousTuple", ...]
 
 def _(rec: RecursiveHomogeneousTuple):
     # TODO should be `tuple[int | RecursiveHomogeneousTuple, ...]`
@@ -319,7 +354,21 @@ my_isinstance(1, 1)
 my_isinstance(1, (int, (str, 1)))
 ```
 
-## Conditionally imported on Python < 3.10
+## Materialization of self-referential generic PEP 613 type aliases
+
+```py
+from typing import TypeAlias, TypeVar, Union
+from ty_extensions import Bottom, Top, is_subtype_of, static_assert
+
+K = TypeVar("K")
+V = TypeVar("V")
+
+NestedDict: TypeAlias = dict[K, Union[V, "NestedDict[K, V]"]]
+
+static_assert(is_subtype_of(Bottom[NestedDict[str, int]], Top[NestedDict[str, int]]))
+```
+
+## Conditionally imported
 
 ```toml
 [environment]
@@ -328,7 +377,8 @@ python-version = "3.9"
 
 ```py
 try:
-    # error: [unresolved-import]
+    # this fails at runtime, but we don't emit an error for it
+    # because typeshed has removed its <3.10 branches for the stdlib
     from typing import TypeAlias
 except ImportError:
     from typing_extensions import TypeAlias
@@ -395,3 +445,151 @@ from typing import TypeAlias
 # error: [invalid-type-form]
 Empty: TypeAlias
 ```
+
+## Simple syntactic validation
+
+We do full validation of the right-hand side of a type alias.
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+```py
+from typing_extensions import Annotated, Literal, TypeAlias
+
+GoodTypeAlias: TypeAlias = Annotated[int, (1, 3.14, lambda x: x)]
+GoodTypeAlias: TypeAlias = tuple[int, *tuple[str, ...]]
+
+var1 = 3
+
+# typing conformance cases:
+BadTypeAlias1: TypeAlias = eval("".join(map(chr, [105, 110, 116])))  # error: [invalid-type-form]
+BadTypeAlias2: TypeAlias = [int, str]  # error: [invalid-type-form]
+BadTypeAlias3: TypeAlias = ((int, str),)  # error: [invalid-type-form]
+BadTypeAlias4: TypeAlias = [int for i in range(1)]  # error: [invalid-type-form]
+BadTypeAlias5: TypeAlias = {"a": "b"}  # error: [invalid-type-form]
+BadTypeAlias6: TypeAlias = (lambda: int)()  # error: [invalid-type-form]
+BadTypeAlias7: TypeAlias = [int][0]  # error: [invalid-type-form]
+BadTypeAlias8: TypeAlias = int if 1 < 3 else str  # error: [invalid-type-form]
+BadTypeAlias9: TypeAlias = var1  # error: [invalid-type-form]
+BadTypeAlias10: TypeAlias = True  # error: [invalid-type-form]
+BadTypeAlias11: TypeAlias = 1  # error: [invalid-type-form]
+BadTypeAlias12: TypeAlias = list or set  # error: [invalid-type-form]
+BadTypeAlias13: TypeAlias = f"{'int'}"  # error: [invalid-type-form]
+
+# bonus ones from Alex:
+#
+# error:[invalid-type-form]
+BadTypeAlias14: TypeAlias = Literal[3.14]
+# error: [invalid-type-form]
+BadTypeAlias15: TypeAlias = Literal[-3.14]
+# error: [unsupported-operator]
+BadTypeAlias16: TypeAlias = list["int" | "str"]
+```
+
+## No type qualifiers
+
+The right-hand side of a type alias definition is a [type expression], not an annotation expression.
+Type qualifiers like `ClassVar` and `Final` are only valid in annotation expressions, so they cannot
+appear in type alias definitions:
+
+```py
+from typing_extensions import ClassVar, Final, Required, NotRequired, ReadOnly, TypeAlias, Unpack
+from dataclasses import InitVar
+
+bad1: TypeAlias = ClassVar[str]  # error: [invalid-type-form]
+bad2: TypeAlias = ClassVar  # error: [invalid-type-form]
+bad3: TypeAlias = Final[int]  # error: [invalid-type-form]
+bad4: TypeAlias = Final  # error: [invalid-type-form]
+bad5: TypeAlias = Required[int]  # error: [invalid-type-form]
+bad6: TypeAlias = NotRequired[int]  # error: [invalid-type-form]
+bad7: TypeAlias = ReadOnly[int]  # error: [invalid-type-form]
+bad9: TypeAlias = InitVar[int]  # error: [invalid-type-form]
+bad10: TypeAlias = InitVar  # error: [invalid-type-form]
+
+differently_bad: TypeAlias = Unpack[tuple[int, ...]]  # snapshot: invalid-type-form
+```
+
+```snapshot
+error[invalid-type-form]: `Unpack` is not allowed in type alias values
+  --> src/mdtest_snippet.py:14:30
+   |
+14 | differently_bad: TypeAlias = Unpack[tuple[int, ...]]  # snapshot: invalid-type-form
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+info: See the following page for a reference on valid type expressions:
+info: https://typing.python.org/en/latest/spec/annotations.html#type-and-annotation-expressions
+```
+
+## `Self`
+
+`Self` is not allowed in an explicit type alias value, even when the alias is defined in a class
+body. Runtime-expression positions, such as `Annotated` metadata, are not part of the alias value's
+type expression.
+
+TODO: Reject `Self` introduced indirectly through runtime-expression forms such as `TypeOf[value]`.
+
+```py
+from typing_extensions import Annotated, Self, TypeAlias, cast
+
+class C:
+    # error: [invalid-type-form] "`Self` cannot be used in a type alias"
+    Alias: TypeAlias = tuple[Self]
+
+    # error: [invalid-type-form] "`Self` cannot be used in a type alias"
+    Simplified: TypeAlias = object | Self
+
+    # error: [invalid-type-form] "`Self` cannot be used in a type alias"
+    Stringified: TypeAlias = "tuple[Self]"
+
+    Metadata: TypeAlias = Annotated[int, cast(Self, object())]
+```
+
+## Disabled `invalid-type-form` `Self` fallback
+
+Rejected aliases recover as `Unknown` even when the diagnostic is disabled:
+
+```toml
+[rules]
+invalid-type-form = "ignore"
+```
+
+```py
+from typing_extensions import Self, TypeAlias
+
+class C:
+    Inner: TypeAlias = Self
+    Tuple: TypeAlias = tuple[Self]
+    Stringified: TypeAlias = "tuple[Self, int]"
+
+    def takes(self, value: Inner) -> None:
+        reveal_type(value)  # revealed: Unknown
+
+    def takes_tuple(self, value: Tuple) -> None:
+        reveal_type(value)  # revealed: tuple[Unknown]
+
+    def takes_stringified(self, value: Stringified) -> None:
+        reveal_type(value)  # revealed: Unknown
+
+    def invalid_attribute(self) -> Self:
+        self.attribute: TypeAlias = Self
+        return self.attribute  # error: [invalid-return-type]
+
+C().takes(1)
+```
+
+## Recursive `TypeIs` and `TypeGuard` aliases don't stack overflow
+
+```py
+from typing import TypeAlias
+from typing_extensions import TypeGuard, TypeIs
+
+RecursiveIs: TypeAlias = TypeIs["RecursiveIs"]
+RecursiveGuard: TypeAlias = TypeGuard["RecursiveGuard"]
+
+AliasIs: TypeAlias = RecursiveIs
+AliasGuard: TypeAlias = RecursiveGuard
+```
+
+[type expression]: https://typing.python.org/en/latest/spec/annotations.html#type-and-annotation-expressions

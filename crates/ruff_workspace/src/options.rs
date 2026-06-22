@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use regex::Regex;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::de::{self};
@@ -19,7 +19,9 @@ use ruff_linter::rules::flake8_import_conventions::settings::BannedAliases;
 use ruff_linter::rules::flake8_pytest_style::settings::SettingsError;
 use ruff_linter::rules::flake8_pytest_style::types;
 use ruff_linter::rules::flake8_quotes::settings::Quote;
-use ruff_linter::rules::flake8_tidy_imports::settings::{ApiBan, Strictness};
+use ruff_linter::rules::flake8_tidy_imports::settings::{
+    AllImports, ApiBan, ImportSelection, ImportSelector, Strictness,
+};
 use ruff_linter::rules::isort::settings::RelativeImportsOrder;
 use ruff_linter::rules::isort::{ImportSection, ImportType};
 use ruff_linter::rules::pep8_naming::settings::IgnoreNames;
@@ -32,7 +34,7 @@ use ruff_linter::rules::{
     pycodestyle, pydoclint, pydocstyle, pyflakes, pylint, pyupgrade, ruff,
 };
 use ruff_linter::settings::types::{
-    IdentifierPattern, OutputFormat, PythonVersion, RequiredVersion,
+    IdentifierPattern, Language, OutputFormat, PreviewMode, PythonVersion, RequiredVersion,
 };
 use ruff_linter::{RuleSelector, warn_user_once};
 use ruff_macros::{CombineOptions, OptionsMetadata};
@@ -262,7 +264,7 @@ pub struct Options {
     ///
     /// For more information on the glob syntax, refer to the [`globset` documentation](https://docs.rs/globset/latest/globset/#syntax).
     #[option(
-        default = r#"["*.py", "*.pyi", "*.pyw", "*.ipynb", "**/pyproject.toml"]"#,
+        default = r#"["*.py", "*.pyi", "*.pyw", "*.ipynb", "*.md", "**/pyproject.toml"]"#,
         value_type = "list[str]",
         example = r#"
             include = ["*.py"]
@@ -281,6 +283,24 @@ pub struct Options {
         "#
     )]
     pub respect_gitignore: Option<bool>,
+
+    /// A mapping of custom file extensions to known file types (overridden
+    /// by the `--extension` command-line flag).
+    ///
+    /// Supported file types include `python`, `pyi`, `ipynb`, and `markdown`.
+    ///
+    /// Any file extensions listed here will be automatically added to the
+    /// default `include` list as a `*.{ext}` glob, so that they are linted
+    /// and formatted without needing any additional configuration settings.
+    #[option(
+        default = "{}",
+        value_type = "dict[str, Language]",
+        example = r#"
+            # Add a custom file extension mapped to Python
+            extension = {rpy="python"}
+        "#
+    )]
+    pub extension: Option<FxHashMap<String, Language>>,
 
     // Generic python options
     /// A list of builtins to treat as defined references, in addition to the
@@ -419,7 +439,7 @@ pub struct Options {
     /// The length is determined by the number of characters per line, except for lines containing East Asian characters or emojis.
     /// For these lines, the [unicode width](https://unicode.org/reports/tr11/) of each character is added up to determine the length.
     ///
-    /// The value must be greater than `0` and less than or equal to `320`.
+    /// The value must be greater than `0`.
     ///
     /// Note: While the formatter will attempt to format lines such that they remain
     /// within the `line-length`, it isn't a hard upper bound, and formatted lines may
@@ -657,6 +677,14 @@ pub struct LintCommonOptions {
 
     /// A list of rule codes or prefixes to ignore, in addition to those
     /// specified by `ignore`.
+    ///
+    /// This option is deprecated because it is now interchangeable with
+    /// [`ignore`](#lint_ignore). In earlier versions of Ruff, `ignore` would
+    /// _replace_ the set of ignored rules when using configuration inheritance
+    /// (via the top-level [`extend`](https://docs.astral.sh/ruff/settings/#extend)
+    /// setting), while `extend-ignore` would _add_ to the inherited set. Ruff
+    /// now merges both `ignore` and `extend-ignore` into a single set, so the
+    /// distinction no longer applies. Use [`ignore`](#lint_ignore) instead.
     #[option(
         default = "[]",
         value_type = "list[RuleSelector]",
@@ -672,6 +700,23 @@ pub struct LintCommonOptions {
 
     /// A list of rule codes or prefixes to enable, in addition to those
     /// specified by [`select`](#lint_select).
+    ///
+    /// Unlike [`select`](#lint_select), which _replaces_ the default rule set
+    /// when specified, `extend-select` _adds_ to whatever rules are already
+    /// active. This makes `extend-select` the preferred option when you want
+    /// to enable additional rules on top of the defaults without having to
+    /// enumerate them.
+    ///
+    /// For example, to enable the defaults plus flake8-bugbear:
+    ///
+    /// ```toml
+    /// [tool.ruff.lint]
+    /// # Adds flake8-bugbear on top of the default rules (E4, E7, E9, F).
+    /// extend-select = ["B"]
+    /// ```
+    ///
+    /// Using `select = ["B"]` instead would _replace_ the defaults, enabling
+    /// only flake8-bugbear.
     #[option(
         default = "[]",
         value_type = "list[RuleSelector]",
@@ -1671,13 +1716,14 @@ impl<'de> Deserialize<'de> for Alias {
 impl Flake8ImportConventionsOptions {
     pub fn try_into_settings(
         self,
+        preview: PreviewMode,
     ) -> anyhow::Result<flake8_import_conventions::settings::Settings> {
         let mut aliases: FxHashMap<String, String> = match self.aliases {
             Some(options_aliases) => options_aliases
                 .into_iter()
                 .map(|(module, alias)| (module.into_string(), alias.into_string()))
                 .collect(),
-            None => flake8_import_conventions::settings::default_aliases(),
+            None => flake8_import_conventions::settings::default_aliases(preview),
         };
         if let Some(extend_aliases) = self.extend_aliases {
             aliases.extend(
@@ -1688,6 +1734,10 @@ impl Flake8ImportConventionsOptions {
         }
 
         let mut normalized_aliases: FxHashMap<String, String> = FxHashMap::default();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "every invalid alias is rejected, regardless of which one is reported first"
+        )]
         for (module, alias) in aliases {
             let normalized_alias = alias.nfkc().collect::<String>();
             if normalized_alias == "__debug__" {
@@ -1698,9 +1748,13 @@ impl Flake8ImportConventionsOptions {
             normalized_aliases.insert(module, normalized_alias);
         }
 
+        let banned_aliases = self.banned_aliases.unwrap_or_else(|| {
+            flake8_import_conventions::settings::default_banned_aliases(preview)
+        });
+
         Ok(flake8_import_conventions::settings::Settings {
             aliases: normalized_aliases,
-            banned_aliases: self.banned_aliases.unwrap_or_default(),
+            banned_aliases,
             banned_from: self.banned_from.unwrap_or_default(),
         })
     }
@@ -2058,16 +2112,118 @@ pub struct Flake8TidyImportsOptions {
         "#
     )]
     pub banned_module_level_imports: Option<Vec<String>>,
+
+    /// Specific modules that must be imported lazily in contexts where `lazy import` is legal, or
+    /// `"all"` to require every lazily-convertible import to use the `lazy` keyword. Ruff ignores
+    /// contexts where `lazy import` is invalid, such as functions, classes, `try`/`except`
+    /// blocks, `__future__` imports, and `from ... import *` statements. This rule is only
+    /// enforced when targeting Python 3.15 or newer.
+    #[option(
+        default = r#"[]"#,
+        value_type = r#""all" | list[str] | { include = "all" | list[str], exclude = list[str] }"#,
+        example = r#"
+            # Require lazy imports for specific modules.
+            require-lazy = ["typing", "foo"]
+
+            # Require lazy imports by default, except for modules with import-time side effects.
+            require-lazy = { include = "all", exclude = ["sitecustomize"] }
+        "#
+    )]
+    pub require_lazy: Option<ImportSelector>,
+
+    /// Specific modules that may not be imported lazily, or `"all"` to forbid lazy imports except
+    /// for any modules excluded from the selector. This rule is only enforced when targeting
+    /// Python 3.15 or newer.
+    #[option(
+        default = r#"[]"#,
+        value_type = r#""all" | list[str] | { include = "all" | list[str], exclude = list[str] }"#,
+        example = r#"
+            # Forbid lazy imports for specific modules.
+            ban-lazy = ["sitecustomize"]
+
+            # Forbid lazy imports by default, while allowing specific exceptions.
+            ban-lazy = { include = "all", exclude = ["typing"] }
+        "#
+    )]
+    pub ban_lazy: Option<ImportSelector>,
 }
 
 impl Flake8TidyImportsOptions {
-    pub fn into_settings(self) -> flake8_tidy_imports::settings::Settings {
-        flake8_tidy_imports::settings::Settings {
+    pub fn try_into_settings(self) -> Result<flake8_tidy_imports::settings::Settings> {
+        let require_lazy = self.require_lazy.unwrap_or_default();
+        let ban_lazy = self.ban_lazy.unwrap_or_default();
+
+        if conflicting_lazy_import_settings(&require_lazy, &ban_lazy) {
+            return Err(anyhow!(
+                "`require-lazy` and `ban-lazy` must not overlap after applying exclusions"
+            ));
+        }
+
+        Ok(flake8_tidy_imports::settings::Settings {
             ban_relative_imports: self.ban_relative_imports.unwrap_or(Strictness::Parents),
             banned_api: self.banned_api.unwrap_or_default(),
             banned_module_level_imports: self.banned_module_level_imports.unwrap_or_default(),
+            require_lazy,
+            ban_lazy,
+        })
+    }
+}
+
+fn conflicting_lazy_import_settings(
+    require_lazy: &ImportSelector,
+    ban_lazy: &ImportSelector,
+) -> bool {
+    overlapping_import_selectors(require_lazy, ban_lazy)
+}
+
+fn overlapping_import_selectors(left: &ImportSelector, right: &ImportSelector) -> bool {
+    match (left.include(), right.include()) {
+        (ImportSelection::All(AllImports::All), ImportSelection::All(AllImports::All)) => true,
+        (ImportSelection::All(AllImports::All), ImportSelection::Imports(imports))
+        | (ImportSelection::Imports(imports), ImportSelection::All(AllImports::All)) => imports
+            .iter()
+            .any(|candidate| candidate_has_overlap(candidate, left.exclude(), right.exclude())),
+        (ImportSelection::Imports(left_imports), ImportSelection::Imports(right_imports)) => {
+            left_imports.iter().any(|left_import| {
+                right_imports.iter().any(|right_import| {
+                    overlapping_root(left_import, right_import).is_some_and(|candidate| {
+                        candidate_has_overlap(candidate, left.exclude(), right.exclude())
+                    })
+                })
+            })
         }
     }
+}
+
+fn candidate_has_overlap(
+    candidate: &str,
+    left_excludes: &[String],
+    right_excludes: &[String],
+) -> bool {
+    !is_fully_excluded(candidate, left_excludes) && !is_fully_excluded(candidate, right_excludes)
+}
+
+fn overlapping_root<'a>(left: &'a str, right: &'a str) -> Option<&'a str> {
+    if matches_module_prefix(left, right) {
+        Some(right)
+    } else if matches_module_prefix(right, left) {
+        Some(left)
+    } else {
+        None
+    }
+}
+
+fn is_fully_excluded(candidate: &str, excludes: &[String]) -> bool {
+    excludes
+        .iter()
+        .any(|exclude| matches_module_prefix(candidate, exclude))
+}
+
+fn matches_module_prefix(module: &str, prefix: &str) -> bool {
+    module == prefix
+        || module
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 /// Options for the `flake8-type-checking` plugin
@@ -2131,7 +2287,7 @@ pub struct Flake8TypeCheckingOptions {
     ///
     /// For example:
     /// ```python
-    /// import fastapi
+    /// from fastapi import FastAPI
     ///
     /// app = FastAPI("app")
     ///
@@ -2497,6 +2653,27 @@ pub struct IsortOptions {
     )]
     pub no_lines_before: Option<Vec<ImportSection>>,
 
+    /// A mapping from import section names to their heading comments.
+    ///
+    /// When set, a comment with the specified text will be added above imports
+    /// in the corresponding section. If a heading comment already exists, it
+    /// will be replaced.
+    ///
+    /// Compatible with isort's `import_heading_{section_name}` settings.
+    #[option(
+        default = r#"{}"#,
+        value_type = r#"dict["future" | "standard-library" | "third-party" | "first-party" | "local-folder" | str, str]"#,
+        scope = "import-heading",
+        example = r#"
+            future = "Future imports"
+            standard-library = "Standard library imports"
+            third-party = "Third party imports"
+            first-party = "First party imports"
+            local-folder = "Local folder imports"
+        "#
+    )]
+    pub import_heading: Option<FxHashMap<ImportSection, String>>,
+
     /// The number of blank lines to place after imports.
     /// Use `-1` for automatic determination.
     ///
@@ -2790,7 +2967,7 @@ impl IsortOptions {
         let sections = self.sections.unwrap_or_default();
 
         // Verify that `sections` doesn't contain any built-in sections.
-        let sections: FxHashMap<String, Vec<glob::Pattern>> = sections
+        let sections: FxHashMap<String, Vec<IdentifierPattern>> = sections
             .into_iter()
             .filter_map(|(section, modules)| match section {
                 ImportSection::Known(section) => {
@@ -2843,6 +3020,19 @@ impl IsortOptions {
             }
         }
 
+        let import_heading = self.import_heading.unwrap_or_default();
+
+        // Verify that all sections listed in `import_heading` are defined in `sections`.
+        let mut import_heading_sections = import_heading.keys().collect::<Vec<_>>();
+        import_heading_sections.sort_unstable();
+        for section in import_heading_sections {
+            if let ImportSection::UserDefined(section_name) = section {
+                if !sections.contains_key(section_name) {
+                    warn_user_once!("`import-heading` contains unknown section: `{:?}`", section,);
+                }
+            }
+        }
+
         // Verify that `default_section` is in `section_order`.
         if !section_order.contains(&default_section) {
             warn_user_once!(
@@ -2883,6 +3073,10 @@ impl IsortOptions {
             constants: FxHashSet::from_iter(self.constants.unwrap_or_default()),
             variables: FxHashSet::from_iter(self.variables.unwrap_or_default()),
             no_lines_before: FxHashSet::from_iter(no_lines_before),
+            import_headings: import_heading
+                .into_iter()
+                .map(|(section, heading)| (section, format!("# {heading}")))
+                .collect(),
             lines_after_imports: self.lines_after_imports.unwrap_or(-1),
             lines_between_types,
             forced_separate: Vec::from_iter(self.forced_separate.unwrap_or_default()),
@@ -3125,6 +3319,53 @@ pub struct PydocstyleOptions {
     /// convention = "google"
     /// ```
     ///
+    /// The PEP 257 convention includes all `D` errors apart from:
+    /// [`D203`](rules/incorrect-blank-line-before-class.md),
+    /// [`D212`](rules/multi-line-summary-first-line.md),
+    /// [`D213`](rules/multi-line-summary-second-line.md),
+    /// [`D214`](rules/overindented-section.md),
+    /// [`D215`](rules/overindented-section-underline.md),
+    /// [`D404`](rules/docstring-starts-with-this.md),
+    /// [`D405`](rules/non-capitalized-section-name.md),
+    /// [`D406`](rules/missing-new-line-after-section-name.md),
+    /// [`D407`](rules/missing-dashed-underline-after-section.md),
+    /// [`D408`](rules/missing-section-underline-after-name.md),
+    /// [`D409`](rules/mismatched-section-underline-length.md),
+    /// [`D410`](rules/no-blank-line-after-section.md),
+    /// [`D411`](rules/no-blank-line-before-section.md),
+    /// [`D413`](rules/missing-blank-line-after-last-section.md),
+    /// [`D415`](rules/missing-terminal-punctuation.md),
+    /// [`D416`](rules/missing-section-name-colon.md),
+    /// [`D417`](rules/undocumented-param.md), and
+    /// [`D420`](rules/incorrect-section-order.md).
+    ///
+    /// The NumPy convention includes all `D` errors apart from:
+    /// [`D107`](rules/undocumented-public-init.md),
+    /// [`D203`](rules/incorrect-blank-line-before-class.md),
+    /// [`D212`](rules/multi-line-summary-first-line.md),
+    /// [`D213`](rules/multi-line-summary-second-line.md),
+    /// [`D402`](rules/signature-in-docstring.md),
+    /// [`D413`](rules/missing-blank-line-after-last-section.md),
+    /// [`D415`](rules/missing-terminal-punctuation.md),
+    /// [`D416`](rules/missing-section-name-colon.md), and
+    /// [`D417`](rules/undocumented-param.md).
+    ///
+    /// The Google convention includes all `D` errors apart from:
+    /// [`D203`](rules/incorrect-blank-line-before-class.md),
+    /// [`D204`](rules/incorrect-blank-line-after-class.md),
+    /// [`D213`](rules/multi-line-summary-second-line.md),
+    /// [`D215`](rules/overindented-section-underline.md),
+    /// [`D400`](rules/missing-trailing-period.md),
+    /// [`D401`](rules/non-imperative-mood.md),
+    /// [`D404`](rules/docstring-starts-with-this.md),
+    /// [`D406`](rules/missing-new-line-after-section-name.md),
+    /// [`D407`](rules/missing-dashed-underline-after-section.md),
+    /// [`D408`](rules/missing-section-underline-after-name.md),
+    /// [`D409`](rules/mismatched-section-underline-length.md), and
+    /// [`D413`](rules/missing-blank-line-after-last-section.md).
+    ///
+    /// For more information see the [FAQ](faq.md#does-ruff-support-numpy-or-google-style-docstrings) entry.
+    ///
     /// To enable an additional rule that's excluded from the convention,
     /// select the desired rule via its fully qualified rule code (e.g.,
     /// `D400` instead of `D4` or `D40`):
@@ -3337,6 +3578,14 @@ pub struct PylintOptions {
     #[option(default = r"50", value_type = "int", example = r"max-statements = 75")]
     pub max_statements: Option<usize>,
 
+    /// Maximum number of statements allowed for a try clause body (see `W0717`).
+    #[option(
+        default = r"5",
+        value_type = "int",
+        example = r"max-statements-in-try = 10"
+    )]
+    pub max_statements_in_try: Option<usize>,
+
     /// Maximum number of public methods allowed for a class (see `PLR0904`).
     #[option(
         default = r"20",
@@ -3377,6 +3626,9 @@ impl PylintOptions {
             max_returns: self.max_returns.unwrap_or(defaults.max_returns),
             max_branches: self.max_branches.unwrap_or(defaults.max_branches),
             max_statements: self.max_statements.unwrap_or(defaults.max_statements),
+            max_statements_in_try: self
+                .max_statements_in_try
+                .unwrap_or(defaults.max_statements_in_try),
             max_public_methods: self
                 .max_public_methods
                 .unwrap_or(defaults.max_public_methods),
@@ -3638,6 +3890,27 @@ pub struct FormatOptions {
         "#
     )]
     pub quote_style: Option<QuoteStyle>,
+
+    /// Controls the quote style for nested strings inside interpolated string expressions.
+    ///
+    /// - `alternating` (default): Use alternating quotes.
+    /// - `preferred`: Use the configured [`quote-style`](#format_quote-style).
+    ///
+    /// ```python
+    /// f"{data['key']}"  # alternating (default)
+    /// f"{data["key"]}"  # preferred
+    /// ```
+    ///
+    /// Note: This setting has no effect when targeting Python versions below 3.12.
+    #[option(
+        default = r#""alternating""#,
+        value_type = r#""alternating" | "preferred""#,
+        example = r#"
+            # Use the configured quote style for nested strings (Python 3.12+ only).
+            nested-string-quote-style = "preferred"
+        "#
+    )]
+    pub nested_string_quote_style: Option<ruff_python_formatter::NestedStringQuoteStyle>,
 
     /// Ruff uses existing trailing commas as an indication that short lines should be left separate.
     /// If this option is set to `true`, the magic trailing comma is ignored.
@@ -4110,8 +4383,11 @@ impl From<LintOptionsWire> for LintOptions {
 
 #[cfg(test)]
 mod tests {
-    use crate::options::Flake8SelfOptions;
+    use crate::options::{Flake8SelfOptions, Flake8TidyImportsOptions};
     use ruff_linter::rules::flake8_self;
+    use ruff_linter::rules::flake8_tidy_imports::settings::{
+        AllImports, ImportSelection, ImportSelector, ImportSelectorSettings,
+    };
     use ruff_python_ast::name::Name;
 
     #[test]
@@ -4158,6 +4434,65 @@ mod tests {
         assert_eq!(
             settings.ignore_names,
             vec![Name::new_static("_foo"), Name::new_static("_bar")]
+        );
+    }
+
+    #[test]
+    fn flake8_tidy_imports_options_allow_disjoint_lazy_import_selectors() {
+        let settings = Flake8TidyImportsOptions {
+            require_lazy: Some(ImportSelector::Settings(ImportSelectorSettings {
+                include: ImportSelection::All(AllImports::All),
+                exclude: vec!["sitecustomize".to_string()],
+            })),
+            ban_lazy: Some(ImportSelector::Selection(ImportSelection::Imports(vec![
+                "sitecustomize".to_string(),
+            ]))),
+            ..Default::default()
+        }
+        .try_into_settings()
+        .unwrap();
+
+        assert!(settings.require_lazy.includes_all());
+        assert!(settings.ban_lazy.exclude().is_empty());
+    }
+
+    #[test]
+    fn flake8_tidy_imports_options_reject_overlapping_lazy_import_selectors() {
+        let error = Flake8TidyImportsOptions {
+            require_lazy: Some(ImportSelector::Selection(ImportSelection::All(
+                AllImports::All,
+            ))),
+            ban_lazy: Some(ImportSelector::Selection(ImportSelection::Imports(vec![
+                "typing".to_string(),
+            ]))),
+            ..Default::default()
+        }
+        .try_into_settings()
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "`require-lazy` and `ban-lazy` must not overlap after applying exclusions"
+        );
+    }
+
+    #[test]
+    fn flake8_tidy_imports_options_reject_all_on_both_sides() {
+        let error = Flake8TidyImportsOptions {
+            require_lazy: Some(ImportSelector::Selection(ImportSelection::All(
+                AllImports::All,
+            ))),
+            ban_lazy: Some(ImportSelector::Selection(ImportSelection::All(
+                AllImports::All,
+            ))),
+            ..Default::default()
+        }
+        .try_into_settings()
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "`require-lazy` and `ban-lazy` must not overlap after applying exclusions"
         );
     }
 }

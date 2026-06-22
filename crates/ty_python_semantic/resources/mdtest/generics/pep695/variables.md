@@ -61,6 +61,161 @@ reveal_type(Valid[int, str, None]())  # revealed: Valid[int, str, None]
 class Invalid[S = T]: ...
 ```
 
+Traditional type variables cannot be used as defaults for functions with PEP 695 type parameters:
+
+```py
+from typing import ParamSpec, TypeVar
+
+K = TypeVar("K")
+P = ParamSpec("P")
+
+# error: [unbound-type-variable] "Legacy type variable `K` cannot be used in a function with PEP 695 type parameters"
+def legacy_default[T = K](): ...
+
+# error: [unbound-type-variable] "Legacy type variable `P` cannot be used in a function with PEP 695 type parameters"
+def paramspec_default[**Q = P](): ...
+
+# error: [unbound-type-variable] "Legacy type variable `K` cannot be used in a function with PEP 695 type parameters"
+# error: [unbound-type-variable] "Legacy type variable `K` cannot be used in a function with PEP 695 type parameters"
+def multiple_legacy_defaults[T = K, U = K](value: K) -> K:
+    return value
+```
+
+### Invalid defaults
+
+A TypeVar default must be compatible with its bound or constraints.
+
+#### Concrete default with a bound
+
+The default must be assignable to the bound:
+
+```py
+# error: [invalid-type-variable-default] "TypeVar default is not assignable to the TypeVar's upper bound"
+def f[T: str = int](): ...
+def g[T: float = int](): ...
+```
+
+#### Concrete default with constraints
+
+The default must be one of the constrained types, even if it is a subtype of one of them:
+
+```py
+from typing import Any
+
+# error: [invalid-type-variable-default] "TypeVar default is inconsistent with the TypeVar's constraints: `bytes` is not one of the constraints of `T`"
+def f[T: (int, str) = bytes](): ...
+def g[T: (int, str) = int](): ...
+
+# A subtype is not sufficient; the default must be exactly one of the constraints.
+# error: [invalid-type-variable-default] "TypeVar default is inconsistent with the TypeVar's constraints: `bool` is not one of the constraints of `T`"
+def h[T: (int, str) = bool](): ...
+
+# `Any` is always allowed as a default, even for constrained TypeVars.
+def i[T: (int, str) = Any](): ...
+```
+
+#### Default TypeVar's bound must be assignable to the outer bound
+
+When the default is a TypeVar, its upper bound must be assignable to the outer TypeVar's bound:
+
+```py
+# OK: `float` in a type expression means `int | float`,
+# and the upper bound of `T1` (`int`) is assignable to `int | float`
+def f[T1: int, S: float = T1](): ...
+
+# `T3` has bound `str`, which is not assignable to `int | float`
+# error: [invalid-type-variable-default] "Default `T3` of TypeVar `U` is not assignable to upper bound `int | float` of `U` because its upper bound `str` is not assignable to `int | float`"
+def g[T3: str, U: float = T3](): ...
+```
+
+#### An unbounded default TypeVar has an implicit `object` bound
+
+An unbounded TypeVar has an implicit upper bound of `object`, which is not assignable to a more
+restrictive bound:
+
+```py
+# error: [invalid-type-variable-default] "Default `T1` of TypeVar `S` is not assignable to upper bound `int` of `S` because its upper bound `object` is not assignable to `int`"
+def f[T1, S: int = T1](): ...
+```
+
+#### A constrained default TypeVar's constraints must all be assignable to the outer bound
+
+When the default TypeVar has constraints, every constraint must be assignable to the outer bound:
+
+```py
+# OK: `T1`'s constraints are `int` and `str`,
+# which are both assignable to `object`
+def f[T1: (int, str), S: object = T1](): ...
+
+# `T1` has constraint `str`, which is not assignable to bound `int`
+# error: [invalid-type-variable-default] "Default `T1` of TypeVar `U` is not assignable to upper bound `int` of `U` because constraint `str` of `T1` is not assignable to `int`"
+def g[T1: (int, str), U: int = T1](): ...
+
+# OK: `T2`'s constraints are `int` and `bool`,
+# which are both assignable to `int`
+def h[T2: (int, bool), V: int = T2](): ...
+```
+
+#### Local type-parameter defaults
+
+PEP 695 type parameters from the same scope can be used as defaults:
+
+```py
+# OK: `T` has bound `int`, which is assignable to `int`
+def f[T: int, U: int = T](): ...
+
+# `T` has bound `int`, which is not assignable to `str`
+# error: [invalid-type-variable-default] "Default `T` of TypeVar `U` is not assignable to upper bound `str` of `U` because its upper bound `int` is not assignable to `str`"
+def g[T: int, U: str = T](): ...
+
+# OK: `T`'s constraints ({int, str}) are a subset of `U`'s ({int, str, bool})
+def h[T: (int, str), U: (int, str, bool) = T](): ...
+
+# `T` has constraint `int` which is not one of `U`'s constraints ({bool, complex})
+# error: [invalid-type-variable-default]
+def i[T: (int, str), U: (bool, complex) = T](): ...
+```
+
+#### A constrained default TypeVar's constraints must be a subset of the outer constraints
+
+When the default TypeVar has constraints, they must all appear in the outer TypeVar's constraint
+list:
+
+```py
+# OK: `T1`'s constraints ({int, str}) are a subset
+# of `S`'s constraints ({int, str, bool})
+def f[T1: (int, str), S: (int, str, bool) = T1](): ...
+
+# `T1` has constraint `int` which is not one of `U`'s constraints ({bool, complex})
+# error: [invalid-type-variable-default]
+def g[T1: (int, str), U: (bool, complex) = T1](): ...
+```
+
+#### Invalid constraints with default (no cascading diagnostic)
+
+When a TypeVar has fewer than two constraints (already invalid), we should not also emit
+`invalid-type-variable-default`:
+
+```py
+# error: [invalid-type-variable-constraints]
+def f[T: (int,) = str](): ...
+```
+
+#### A non-constrained default TypeVar is incompatible with a constrained outer TypeVar
+
+A bounded or unbounded TypeVar (one without constraints) cannot be used as the default for a
+constrained TypeVar, because there is no guarantee it will satisfy any of the constraints:
+
+```py
+# `T1` has a bound but no constraints
+# error: [invalid-type-variable-default]
+def f[T1: int, S: (float, str) = T1](): ...
+
+# `T2` has no bound or constraints
+# error: [invalid-type-variable-default]
+def g[T2, U: (str, bytes) = T2](): ...
+```
+
 ### Type variables with an upper bound
 
 ```py
@@ -629,8 +784,8 @@ involving them.
 This means that when intersecting a constrained typevar with a type `T`, constraints that are
 supertypes of `T` can be simplified to `T`, since intersection distributes over `OneOf`. Moreover,
 constraints that are disjoint from `T` are no longer valid specializations of the typevar, since
-`Never` is an identity for `OneOf`. After these simplifications, if only one constraint remains, we
-can simplify the intersection as a whole to that constraint.
+`Never` is an identity for `OneOf`. Even if only one compatible constraint remains, we preserve the
+typevar itself in the intersection so other occurrences of the same typevar stay correlated.
 
 ```py
 def constrained[T: (Base, Sub, Unrelated)](t: T) -> None:
@@ -639,10 +794,10 @@ def constrained[T: (Base, Sub, Unrelated)](t: T) -> None:
         reveal_type(x)  # revealed: T@constrained & Base
 
     def _(x: Intersection[T, Unrelated]) -> None:
-        reveal_type(x)  # revealed: Unrelated
+        reveal_type(x)  # revealed: T@constrained & Unrelated
 
     def _(x: Intersection[T, Sub]) -> None:
-        reveal_type(x)  # revealed: Sub
+        reveal_type(x)  # revealed: T@constrained & Sub
 
     def _(x: Intersection[T, None]) -> None:
         reveal_type(x)  # revealed: Never
@@ -659,7 +814,7 @@ from ty_extensions import Not
 
 def remove_constraint[T: (int, str, bool)](t: T) -> None:
     def _(x: Intersection[T, Not[int]]) -> None:
-        reveal_type(x)  # revealed: str
+        reveal_type(x)  # revealed: T@remove_constraint & str
 
     def _(x: Intersection[T, Not[str]]) -> None:
         # With OneOf this would be OneOf[int, bool]
@@ -692,6 +847,88 @@ def intersection_is_assignable[T](t: T) -> None:
     static_assert(is_subtype_of(Intersection[T, Not[None]], T))
 ```
 
+## Bounded typevars remain assignable to their upper bound after narrowing
+
+Narrowing can leave a bounded typevar represented as an intersection, but it should still be
+assignable to its upper bound.
+
+```py
+from typing import Callable
+from ty_extensions import Intersection, Not
+
+class A: ...
+
+class SomeClass[T: int | str]:
+    field: T
+
+    def narrowed1(self) -> None:
+        narrowed: int | str
+        assert not isinstance(self.field, int)
+        reveal_type(self.field)  # revealed: T@SomeClass & ~int
+        narrowed = self.field
+
+    def narrowed2(self) -> None:
+        narrowed: int | str
+        assert not isinstance(self.field, A)
+        reveal_type(self.field)  # revealed: T@SomeClass & ~A
+        narrowed = self.field
+
+def lenient_issubclass[T: type | tuple[type, ...]](class_or_tuple: T) -> T:
+    if not isinstance(class_or_tuple, tuple):
+        reveal_type(class_or_tuple)  # revealed: T@lenient_issubclass & ~tuple[object, ...]
+        # `T@lenient_issubclass & ~tuple[object, ...]` is assignable to `type`,
+        # because `(type | tuple[type, ...]) & ~tuple[object, ...]` simplifies to `type`
+        return check(class_or_tuple)
+    return class_or_tuple
+
+def check(check_type: type): ...
+
+# In this scenario, we do not expand the intersection,
+# because it only has inferrable type variables in it.
+# This ensures that we continue to infer a precise type on the last line here:
+def higher[U](f: Callable[[U], type]) -> U:
+    raise NotImplementedError
+
+def source[T: type | tuple[type, ...]](x: T) -> Intersection[T, Not[tuple[object, ...]]]:
+    raise NotImplementedError
+
+reveal_type(higher(source))  # revealed: type
+
+def iterable_after_negative_narrow[T: str | list[str]](foo: T) -> None:
+    if isinstance(foo, str):
+        return
+    reveal_type(foo)  # revealed: T@iterable_after_negative_narrow & ~str
+    for x in foo:
+        reveal_type(x)  # revealed: str
+
+def non_iterable_after_negative_narrow[T: int | list[str]](foo: T) -> None:
+    if isinstance(foo, list):
+        return
+    reveal_type(foo)  # revealed: T@non_iterable_after_negative_narrow & ~Top[list[Unknown]]
+    for x in foo: ...  # error: [not-iterable]
+```
+
+## Constrained typevars remain assignable to the union of their constraints after narrowing
+
+```py
+class A: ...
+
+class SomeClass[T: (int, str)]:
+    field: T
+
+    def narrowed1(self) -> None:
+        narrowed: int | str
+        assert not isinstance(self.field, int)
+        reveal_type(self.field)  # revealed: T@SomeClass & str
+        narrowed = self.field
+
+    def narrowed2(self) -> None:
+        narrowed: int | str
+        assert not isinstance(self.field, A)
+        reveal_type(self.field)  # revealed: T@SomeClass & ~A
+        narrowed = self.field
+```
+
 ## Narrowing
 
 We can use narrowing expressions to eliminate some of the possibilities of a constrained typevar:
@@ -703,38 +940,38 @@ class R: ...
 
 def f[T: (P, Q)](t: T) -> None:
     if isinstance(t, P):
-        reveal_type(t)  # revealed: P
+        reveal_type(t)  # revealed: T@f & P
         p: P = t
     else:
-        reveal_type(t)  # revealed: Q & ~P
+        reveal_type(t)  # revealed: T@f & Q & ~P
         q: Q = t
 
     if isinstance(t, Q):
-        reveal_type(t)  # revealed: Q
+        reveal_type(t)  # revealed: T@f & Q
         q: Q = t
     else:
-        reveal_type(t)  # revealed: P & ~Q
+        reveal_type(t)  # revealed: T@f & P & ~Q
         p: P = t
 
 def g[T: (P, Q, R)](t: T) -> None:
     if isinstance(t, P):
-        reveal_type(t)  # revealed: P
+        reveal_type(t)  # revealed: T@g & P
         p: P = t
     elif isinstance(t, Q):
-        reveal_type(t)  # revealed: Q & ~P
+        reveal_type(t)  # revealed: T@g & Q & ~P
         q: Q = t
     else:
-        reveal_type(t)  # revealed: R & ~P & ~Q
+        reveal_type(t)  # revealed: T@g & R & ~P & ~Q
         r: R = t
 
     if isinstance(t, P):
-        reveal_type(t)  # revealed: P
+        reveal_type(t)  # revealed: T@g & P
         p: P = t
     elif isinstance(t, Q):
-        reveal_type(t)  # revealed: Q & ~P
+        reveal_type(t)  # revealed: T@g & Q & ~P
         q: Q = t
     elif isinstance(t, R):
-        reveal_type(t)  # revealed: R & ~P & ~Q
+        reveal_type(t)  # revealed: T@g & R & ~P & ~Q
         r: R = t
     else:
         reveal_type(t)  # revealed: Never
@@ -745,10 +982,10 @@ If the constraints are disjoint, simplification does eliminate the redundant neg
 ```py
 def h[T: (P, None)](t: T) -> None:
     if t is None:
-        reveal_type(t)  # revealed: None
+        reveal_type(t)  # revealed: T@h & None
         p: None = t
     else:
-        reveal_type(t)  # revealed: P
+        reveal_type(t)  # revealed: T@h & P
         p: P = t
 ```
 
@@ -799,11 +1036,11 @@ A typevar's bounds and constraints cannot be generic, cyclic or otherwise:
 ```py
 from typing import Any
 
-# TODO: error
+# error: [invalid-type-variable-bound]
 def f[S, T: list[S]](x: S, y: T) -> S | T:
     return x or y
 
-# TODO: error
+# error: [invalid-type-variable-bound]
 class C[S, T: list[S]]:
     x: S
     y: T
@@ -811,21 +1048,21 @@ class C[S, T: list[S]]:
 reveal_type(C[int, list[Any]]().x)  # revealed: int
 reveal_type(C[int, list[Any]]().y)  # revealed: list[Any]
 
-# TODO: error
+# error: [invalid-type-variable-bound]
 def g[T: list[T]](x: T) -> T:
     return x
 
-# TODO: error
+# error: [invalid-type-variable-bound]
 class D[T: list[T]]:
     x: T
 
 reveal_type(D[list[Any]]().x)  # revealed: list[Any]
 
-# TODO: error
+# error: [invalid-type-variable-constraints]
 def h[S, T: (list[S], str)](x: S, y: T) -> S | T:
     return x or y
 
-# TODO: error
+# error: [invalid-type-variable-constraints]
 class E[S, T: (list[S], str)]:
     x: S
     y: T
@@ -833,11 +1070,11 @@ class E[S, T: (list[S], str)]:
 reveal_type(E[int, str]().x)  # revealed: int
 reveal_type(E[int, str]().y)  # revealed: str
 
-# TODO: error
+# error: [invalid-type-variable-constraints]
 def i[T: (list[T], str)](x: T) -> T:
     return x
 
-# TODO: error
+# error: [invalid-type-variable-constraints]
 class F[T: (list[T], str)]:
     x: T
 
@@ -847,9 +1084,10 @@ reveal_type(F[list[Any]]().x)  # revealed: list[Any]
 However, they are lazily evaluated and can cyclically refer to their own type:
 
 ```py
-class G[T: list[G]]:
+class G[T: list[G]]:  # error: [missing-type-argument]
     x: T
 
+# error: [missing-type-argument]
 reveal_type(G[list[G]]().x)  # revealed: list[G[Unknown]]
 ```
 

@@ -1,23 +1,34 @@
+use itertools::Either;
 use ruff_db::files::File;
+use ruff_index::IndexSlice;
 use ruff_python_ast::PythonVersion;
 use ty_module_resolver::{
     KnownModule, Module, ModuleName, file_to_module, resolve_module_confident,
 };
 
 use crate::dunder_all::dunder_all_names;
-use crate::semantic_index::definition::{Definition, DefinitionState};
-use crate::semantic_index::place::{PlaceExprRef, ScopedPlaceId};
-use crate::semantic_index::scope::ScopeId;
-use crate::semantic_index::{
-    BindingWithConstraints, BindingWithConstraintsIterator, DeclarationsIterator, place_table,
+use crate::reachability::{
+    ReachabilityEvaluationCache, evaluate_reachability, evaluate_reachability_with_cache,
 };
-use crate::semantic_index::{DeclarationWithConstraint, global_scope, use_def_map};
+use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::{
-    ApplyTypeMappingVisitor, DynamicType, KnownClass, MaterializationKind, MemberLookupPolicy,
-    Truthiness, Type, TypeAndQualifiers, TypeQualifiers, UnionBuilder, UnionType, binding_type,
-    declaration_type, todo_type,
+    DynamicType, KnownClass, MemberLookupPolicy, Type, TypeAndQualifiers, TypeQualifiers,
+    UnionBuilder, UnionType, binding_type, inferred_declaration, is_discarded_dict_key_assignment,
 };
-use crate::{Db, FxOrderSet, Program};
+use crate::{Db, FxIndexSet, FxOrderSet, Program};
+use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
+use ty_python_core::narrowing_constraints::ScopedNarrowingConstraint;
+use ty_python_core::place::ScopedPlaceId;
+use ty_python_core::predicate::{Predicate, ScopedPredicateId};
+use ty_python_core::reachability_constraints::{
+    ReachabilityConstraints, ScopedReachabilityConstraintId,
+};
+use ty_python_core::scope::ScopeId;
+use ty_python_core::{
+    BindingWithConstraints, BindingWithConstraintsIterator, BoundnessAnalysis,
+    DeclarationWithConstraint, DeclarationsIterator, Truthiness, get_loop_header, global_scope,
+    place_table, use_def_map,
+};
 
 pub(crate) use implicit_globals::{
     module_type_implicit_global_declaration, module_type_implicit_global_symbol,
@@ -61,40 +72,77 @@ impl TypeOrigin {
     }
 }
 
-/// Whether a place's type should be widened with `Unknown` when accessed publicly.
+/// How a place's raw type should be adjusted when accessed publicly.
 ///
 /// For undeclared public symbols (e.g., class attributes without type annotations),
-/// the gradual typing guarantee requires that we consider them as potentially
-/// modified externally, so their type is widened to a union with `Unknown`.
-///
-/// This enum tracks whether such widening should be applied, allowing callers
-/// to access either the raw inferred type or the widened public type.
+/// we store the raw inferred type and lazily apply the public-type policy when
+/// converting the place into a public lookup result.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default, get_size2::GetSize)]
-pub(crate) enum Widening {
-    /// The type should not be widened with `Unknown`.
+pub(crate) enum PublicTypePolicy {
+    /// Public lookup should expose the raw stored type.
     #[default]
-    None,
-    /// The type should be widened with `Unknown` when accessed publicly.
-    WithUnknown,
+    Raw,
+    /// Public lookup should expose the promoted stored type.
+    Promote,
 }
 
-impl Widening {
-    /// Apply widening to the type if this is `WithUnknown`.
+impl PublicTypePolicy {
+    /// Apply the public-type policy to the raw type.
     pub(crate) fn apply_if_needed<'db>(self, db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
         match self {
-            Self::None => ty,
-            Self::WithUnknown => UnionType::from_elements(db, [Type::unknown(), ty]),
+            Self::Raw => ty,
+            Self::Promote => ty.promote(db).promote_singletons(db),
         }
     }
 }
 
-/// A defined place with its type, origin, definedness, and widening information.
+/// The source definition provenance for a place.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+pub(crate) enum Provenance<'db> {
+    /// No source definition is known.
+    #[default]
+    Unknown,
+    /// Exactly one source definition is known.
+    SingleDefinition(Definition<'db>),
+    /// Multiple distinct source definitions contribute to the place. Instead of storing all of
+    /// them, or selecting one arbitrarily, we currently discard provenance information in this
+    /// case.
+    MultipleDefinitions,
+}
+
+impl<'db> Provenance<'db> {
+    pub(crate) fn from_definition(definition: Option<Definition<'db>>) -> Self {
+        definition.map_or(Self::Unknown, Self::SingleDefinition)
+    }
+
+    /// Merge the provenance from two places.
+    pub(crate) fn or(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Unknown, provenance) | (provenance, Self::Unknown) => provenance,
+            (Self::MultipleDefinitions, _) | (_, Self::MultipleDefinitions) => {
+                Self::MultipleDefinitions
+            }
+            (Self::SingleDefinition(left), Self::SingleDefinition(right)) if left == right => self,
+            (Self::SingleDefinition(_), Self::SingleDefinition(_)) => Self::MultipleDefinitions,
+        }
+    }
+
+    pub(crate) fn definition(self) -> Option<Definition<'db>> {
+        match self {
+            Self::SingleDefinition(definition) => Some(definition),
+            Self::Unknown | Self::MultipleDefinitions => None,
+        }
+    }
+}
+
+/// A defined place with its raw type, origin, definedness, public-type policy, and provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
 pub(crate) struct DefinedPlace<'db> {
     pub(crate) ty: Type<'db>,
     pub(crate) origin: TypeOrigin,
     pub(crate) definedness: Definedness,
-    pub(crate) widening: Widening,
+    pub(crate) public_type_policy: PublicTypePolicy,
+    pub(crate) provenance: Provenance<'db>,
 }
 
 impl<'db> DefinedPlace<'db> {
@@ -103,7 +151,8 @@ impl<'db> DefinedPlace<'db> {
             ty,
             origin: TypeOrigin::Inferred,
             definedness: Definedness::AlwaysDefined,
-            widening: Widening::None,
+            public_type_policy: PublicTypePolicy::Raw,
+            provenance: Provenance::Unknown,
         }
     }
 
@@ -117,8 +166,18 @@ impl<'db> DefinedPlace<'db> {
         self
     }
 
-    pub(crate) fn with_widening(mut self, widening: Widening) -> Self {
-        self.widening = widening;
+    pub(crate) fn with_public_type_policy(mut self, public_type_policy: PublicTypePolicy) -> Self {
+        self.public_type_policy = public_type_policy;
+        self
+    }
+
+    pub(crate) fn with_definition(mut self, definition: Definition<'db>) -> Self {
+        self.provenance = Provenance::SingleDefinition(definition);
+        self
+    }
+
+    pub(crate) fn with_provenance(mut self, provenance: Provenance<'db>) -> Self {
+        self.provenance = provenance;
         self
     }
 
@@ -174,11 +233,35 @@ impl<'db> Place<'db> {
         Place::Defined(DefinedPlace::new(ty.into()).with_origin(TypeOrigin::Declared))
     }
 
-    /// Constructor that creates a [`Place`] with a [`crate::types::TodoType`] type
-    /// and definedness [`Definedness::AlwaysDefined`].
-    #[allow(unused_variables)] // Only unused in release builds
-    pub(crate) fn todo(message: &'static str) -> Self {
-        Place::Defined(DefinedPlace::new(todo_type!(message)))
+    /// Returns this place with the given definition attached. A no-op for [`Place::Undefined`].
+    #[must_use]
+    pub(crate) fn with_definition(self, definition: Definition<'db>) -> Self {
+        match self {
+            Place::Defined(defined) => Place::Defined(defined.with_definition(definition)),
+            Place::Undefined => Place::Undefined,
+        }
+    }
+
+    /// Returns this place with the given provenance attached. A no-op for [`Place::Undefined`].
+    #[must_use]
+    pub(crate) fn with_provenance(self, provenance: Provenance<'db>) -> Self {
+        match self {
+            Place::Defined(defined) => Place::Defined(defined.with_provenance(provenance)),
+            Place::Undefined => Place::Undefined,
+        }
+    }
+
+    pub(crate) fn is_equal_ignoring_provenance(self, other: Self) -> bool {
+        match (self, other) {
+            (Place::Defined(left), Place::Defined(right)) => {
+                left.ty == right.ty
+                    && left.origin == right.origin
+                    && left.definedness == right.definedness
+                    && left.public_type_policy == right.public_type_policy
+            }
+            (Place::Undefined, Place::Undefined) => true,
+            _ => false,
+        }
     }
 
     pub(crate) fn is_undefined(&self) -> bool {
@@ -196,11 +279,10 @@ impl<'db> Place<'db> {
         }
     }
 
-    /// Returns the type of the place without widening applied.
+    /// Returns the raw stored type of the place.
     ///
-    /// The stored type is always the unwidened type. Widening (union with `Unknown`)
-    /// is applied lazily when converting to `LookupResult`.
-    pub(crate) fn unwidened_type(&self) -> Option<Type<'db>> {
+    /// Any public-type adjustment is applied lazily when converting to `LookupResult`.
+    pub(crate) fn raw_type(&self) -> Option<Type<'db>> {
         match self {
             Place::Defined(defined) => Some(defined.ty),
             Place::Undefined => None,
@@ -225,11 +307,16 @@ impl<'db> Place<'db> {
         }
     }
 
-    /// Set the widening mode for this place.
+    /// Set the public-type policy for this place.
     #[must_use]
-    pub(crate) fn with_widening(self, new_widening: Widening) -> Place<'db> {
+    pub(crate) fn with_public_type_policy(
+        self,
+        new_public_type_policy: PublicTypePolicy,
+    ) -> Place<'db> {
         match self {
-            Place::Defined(defined) => Place::Defined(defined.with_widening(new_widening)),
+            Place::Defined(defined) => {
+                Place::Defined(defined.with_public_type_policy(new_public_type_policy))
+            }
             Place::Undefined => Place::Undefined,
         }
     }
@@ -267,10 +354,11 @@ impl<'db> Place<'db> {
 
             Place::Defined(defined) => {
                 if let Some((dunder_get_return_ty, _)) =
-                    defined.ty.try_call_dunder_get(db, Type::none(db), owner)
+                    defined.ty.try_call_dunder_get(db, None, owner)
                 {
                     Place::Defined(DefinedPlace {
                         ty: dunder_get_return_ty,
+                        provenance: Provenance::Unknown,
                         ..defined
                     })
                 } else {
@@ -296,12 +384,18 @@ impl<'db> Place<'db> {
 impl<'db> From<LookupResult<'db>> for PlaceAndQualifiers<'db> {
     fn from(value: LookupResult<'db>) -> Self {
         match value {
-            Ok(type_and_qualifiers) => Place::bound(type_and_qualifiers.inner_type())
-                .with_qualifiers(type_and_qualifiers.qualifiers()),
+            Ok(type_and_qualifiers) => Place::Defined(
+                DefinedPlace::new(type_and_qualifiers.inner_type())
+                    .with_origin(type_and_qualifiers.origin())
+                    .with_provenance(type_and_qualifiers.provenance()),
+            )
+            .with_qualifiers(type_and_qualifiers.qualifiers()),
             Err(LookupError::Undefined(qualifiers)) => Place::Undefined.with_qualifiers(qualifiers),
             Err(LookupError::PossiblyUndefined(type_and_qualifiers)) => Place::Defined(
                 DefinedPlace::new(type_and_qualifiers.inner_type())
-                    .with_definedness(Definedness::PossiblyUndefined),
+                    .with_origin(type_and_qualifiers.origin())
+                    .with_definedness(Definedness::PossiblyUndefined)
+                    .with_provenance(type_and_qualifiers.provenance()),
             )
             .with_qualifiers(type_and_qualifiers.qualifiers()),
         }
@@ -327,16 +421,20 @@ impl<'db> LookupError<'db> {
             (LookupError::Undefined(_), _) => fallback,
             (LookupError::PossiblyUndefined { .. }, Err(LookupError::Undefined(_))) => Err(self),
             (LookupError::PossiblyUndefined(ty), Ok(ty2)) => Ok(TypeAndQualifiers::new(
-                UnionType::from_elements(db, [ty.inner_type(), ty2.inner_type()]),
+                UnionType::from_two_elements(db, ty.inner_type(), ty2.inner_type()),
                 ty.origin().merge(ty2.origin()),
                 ty.qualifiers().union(ty2.qualifiers()),
-            )),
+            )
+            .with_provenance(ty.provenance().or(ty2.provenance()))),
             (LookupError::PossiblyUndefined(ty), Err(LookupError::PossiblyUndefined(ty2))) => {
-                Err(LookupError::PossiblyUndefined(TypeAndQualifiers::new(
-                    UnionType::from_elements(db, [ty.inner_type(), ty2.inner_type()]),
-                    ty.origin().merge(ty2.origin()),
-                    ty.qualifiers().union(ty2.qualifiers()),
-                )))
+                Err(LookupError::PossiblyUndefined(
+                    TypeAndQualifiers::new(
+                        UnionType::from_two_elements(db, ty.inner_type(), ty2.inner_type()),
+                        ty.origin().merge(ty2.origin()),
+                        ty.qualifiers().union(ty2.qualifiers()),
+                    )
+                    .with_provenance(ty.provenance().or(ty2.provenance())),
+                ))
             }
         }
     }
@@ -362,23 +460,6 @@ pub(crate) fn symbol<'db>(
         db,
         scope,
         name,
-        RequiresExplicitReExport::No,
-        considered_definitions,
-    )
-}
-
-/// Infer the public type of a place (its type as seen from outside its scope) in the given
-/// `scope`.
-pub(crate) fn place<'db>(
-    db: &'db dyn Db,
-    scope: ScopeId<'db>,
-    member: PlaceExprRef,
-    considered_definitions: ConsideredDefinitions,
-) -> PlaceAndQualifiers<'db> {
-    place_impl(
-        db,
-        scope,
-        member,
         RequiresExplicitReExport::No,
         considered_definitions,
     )
@@ -427,20 +508,14 @@ pub(crate) fn global_symbol<'db>(
 ///
 /// If `requires_explicit_reexport` is [`None`], it will be inferred from the file's source type.
 /// For stub files, explicit re-export will be required, while for non-stub files, it will not.
+///
+/// `None` should be passed for the `file` parameter if looking up a symbol on a namespace package.
 pub(crate) fn imported_symbol<'db>(
     db: &'db dyn Db,
-    file: File,
+    file: Option<File>,
     name: &str,
     requires_explicit_reexport: Option<RequiresExplicitReExport>,
 ) -> PlaceAndQualifiers<'db> {
-    let requires_explicit_reexport = requires_explicit_reexport.unwrap_or_else(|| {
-        if file.is_stub(db) {
-            RequiresExplicitReExport::Yes
-        } else {
-            RequiresExplicitReExport::No
-        }
-    });
-
     // If it's not found in the global scope, check if it's present as an instance on
     // `types.ModuleType` or `builtins.object`.
     //
@@ -456,22 +531,49 @@ pub(crate) fn imported_symbol<'db>(
     // ignore `__getattr__`. Typeshed has a fake `__getattr__` on `types.ModuleType` to help out with
     // dynamic imports; we shouldn't use it for `ModuleLiteral` types where we know exactly which
     // module we're dealing with.
-    symbol_impl(
-        db,
-        global_scope(db, file),
-        name,
-        requires_explicit_reexport,
-        ConsideredDefinitions::EndOfScope,
-    )
+    file.map(|file| {
+        let requires_explicit_reexport = requires_explicit_reexport.unwrap_or_else(|| {
+            if file.is_stub(db) {
+                RequiresExplicitReExport::Yes
+            } else {
+                RequiresExplicitReExport::No
+            }
+        });
+
+        symbol_impl(
+            db,
+            global_scope(db, file),
+            name,
+            requires_explicit_reexport,
+            ConsideredDefinitions::EndOfScope,
+        )
+    })
+    .unwrap_or_default()
     .or_fall_back_to(db, || {
-        if name == "__getattr__" {
-            Place::Undefined.into()
-        } else if name == "__builtins__" {
-            Place::bound(Type::any()).into()
-        } else {
-            KnownClass::ModuleType
+        match name {
+            "__file__" => {
+                // We special-case `__file__` here because we know that for a successfully imported
+                // non-namespace-package Python module, that hasn't been explicitly overridden it
+                // is always a string, even though typeshed says `str | None`. For a namespace package,
+                // meanwhile, it will always be `None`.
+                //
+                // Note that C-extension modules (stdlib examples include `sys`, `itertools`, etc.)
+                //  may not have a `__file__` attribute at runtime at all, but that doesn't really
+                // affect the *type* of the attribute, just the *boundness*. There's no way for us
+                // to know right now whether a stub represents a C extension or not, so for now we
+                // do not attempt to detect this; we just infer `str` still. This matches the
+                // behaviour of other major type checkers.
+                if file.is_some() {
+                    Place::bound(KnownClass::Str.to_instance(db)).into()
+                } else {
+                    Place::bound(Type::none(db)).into()
+                }
+            }
+            "__getattr__" => Place::Undefined.into(),
+            "__builtins__" => Place::bound(Type::any()).into(),
+            _ => KnownClass::ModuleType
                 .to_instance(db)
-                .member_lookup_with_policy(db, name.into(), MemberLookupPolicy::NO_GETATTR_LOOKUP)
+                .member_lookup_with_policy(db, name.into(), MemberLookupPolicy::NO_GETATTR_LOOKUP),
         }
     })
 }
@@ -521,7 +623,7 @@ pub(crate) fn known_module_symbol<'db>(
     resolve_module_confident(db, &known_module.name())
         .and_then(|module| {
             let file = module.file(db)?;
-            Some(imported_symbol(db, file, symbol, None))
+            Some(imported_symbol(db, Some(file), symbol, None))
         })
         .unwrap_or_default()
 }
@@ -569,7 +671,25 @@ pub(super) fn place_from_bindings<'db>(
     db: &'db dyn Db,
     bindings_with_constraints: BindingWithConstraintsIterator<'_, 'db>,
 ) -> PlaceWithDefinition<'db> {
-    place_from_bindings_impl(db, bindings_with_constraints, RequiresExplicitReExport::No)
+    place_from_bindings_impl(
+        db,
+        bindings_with_constraints,
+        RequiresExplicitReExport::No,
+        None,
+    )
+}
+
+pub(super) fn place_from_bindings_with_reachability_cache<'db>(
+    db: &'db dyn Db,
+    bindings_with_constraints: BindingWithConstraintsIterator<'_, 'db>,
+    reachability_cache: &ReachabilityEvaluationCache<'db>,
+) -> PlaceWithDefinition<'db> {
+    place_from_bindings_impl(
+        db,
+        bindings_with_constraints,
+        RequiresExplicitReExport::No,
+        Some(reachability_cache),
+    )
 }
 
 /// Build a declared type from a [`DeclarationsIterator`].
@@ -584,7 +704,20 @@ pub(crate) fn place_from_declarations<'db>(
     db: &'db dyn Db,
     declarations: DeclarationsIterator<'_, 'db>,
 ) -> PlaceFromDeclarationsResult<'db> {
-    place_from_declarations_impl(db, declarations, RequiresExplicitReExport::No)
+    place_from_declarations_impl(db, declarations, RequiresExplicitReExport::No, None)
+}
+
+pub(crate) fn place_from_declarations_with_reachability_cache<'db>(
+    db: &'db dyn Db,
+    declarations: DeclarationsIterator<'_, 'db>,
+    reachability_cache: &ReachabilityEvaluationCache<'db>,
+) -> PlaceFromDeclarationsResult<'db> {
+    place_from_declarations_impl(
+        db,
+        declarations,
+        RequiresExplicitReExport::No,
+        Some(reachability_cache),
+    )
 }
 
 type DeclaredTypeAndConflictingTypes<'db> = (
@@ -650,17 +783,6 @@ pub(crate) struct PlaceAndQualifiers<'db> {
 }
 
 impl<'db> PlaceAndQualifiers<'db> {
-    /// Constructor that creates a [`PlaceAndQualifiers`] instance with a [`TodoType`] type
-    /// and no qualifiers.
-    ///
-    /// [`TodoType`]: crate::types::TodoType
-    pub(crate) fn todo(message: &'static str) -> Self {
-        Self {
-            place: Place::todo(message),
-            qualifiers: TypeQualifiers::empty(),
-        }
-    }
-
     pub(crate) fn unbound() -> Self {
         Self::default()
     }
@@ -724,29 +846,21 @@ impl<'db> PlaceAndQualifiers<'db> {
         }
     }
 
-    pub(crate) fn materialize(
-        self,
-        db: &'db dyn Db,
-        materialization_kind: MaterializationKind,
-        visitor: &ApplyTypeMappingVisitor<'db>,
-    ) -> PlaceAndQualifiers<'db> {
-        self.map_type(|ty| ty.materialize(db, materialization_kind, visitor))
-    }
-
     /// Transform place and qualifiers into a [`LookupResult`],
     /// a [`Result`] type in which the `Ok` variant represents a definitely defined place
     /// and the `Err` variant represents a place that is either definitely or possibly undefined.
     ///
-    /// For places marked with `Widening::WithUnknown`, this applies the gradual typing guarantee
-    /// by creating a union with `Unknown`.
+    /// For places whose public type differs from their raw stored type, this applies the
+    /// public-type policy lazily during lookup.
     pub(crate) fn into_lookup_result(self, db: &'db dyn Db) -> LookupResult<'db> {
         match self {
             PlaceAndQualifiers {
                 place: Place::Defined(place),
                 qualifiers,
             } => {
-                let ty = place.widening.apply_if_needed(db, place.ty);
-                let type_and_qualifiers = TypeAndQualifiers::new(ty, place.origin, qualifiers);
+                let ty = place.public_type_policy.apply_if_needed(db, place.ty);
+                let type_and_qualifiers = TypeAndQualifiers::new(ty, place.origin, qualifiers)
+                    .with_provenance(place.provenance);
                 match place.definedness {
                     Definedness::AlwaysDefined => Ok(type_and_qualifiers),
                     Definedness::PossiblyUndefined => {
@@ -802,11 +916,28 @@ impl<'db> PlaceAndQualifiers<'db> {
         previous_place: Self,
         cycle: &salsa::Cycle,
     ) -> Self {
+        let qualifiers = if cycle.iteration() <= 1 {
+            self.qualifiers
+        } else {
+            previous_place.qualifiers.union(self.qualifiers)
+        };
         let place = match (previous_place.place, self.place) {
-            // In fixed-point iteration of type inference, the member type must be monotonically widened and not "oscillate".
-            // Here, monotonicity is guaranteed by pre-unioning the type of the previous iteration into the current result.
+            // In fixed-point iteration of type inference, the member result must be monotonically
+            // widened and not "oscillate". The type component is widened by unioning the previous
+            // iteration into the current result; after the first couple iterations, the same
+            // applies to boundness and qualifiers.
             (Place::Defined(prev), Place::Defined(current)) => Place::Defined(DefinedPlace {
                 ty: current.ty.cycle_normalized(db, prev.ty, cycle),
+                definedness: if cycle.iteration() <= 1
+                    || matches!(
+                        (prev.definedness, current.definedness),
+                        (Definedness::AlwaysDefined, Definedness::AlwaysDefined)
+                    ) {
+                    current.definedness
+                } else {
+                    Definedness::PossiblyUndefined
+                },
+                provenance: prev.provenance.or(current.provenance),
                 ..current
             }),
             // If a `Place` in the current cycle is `Defined` but `Undefined` in the previous cycle,
@@ -818,7 +949,11 @@ impl<'db> PlaceAndQualifiers<'db> {
             // so it may be better to remove it. In that case, this branch is necessary.
             (Place::Undefined, Place::Defined(current)) => Place::Defined(DefinedPlace {
                 ty: current.ty.recursive_type_normalized(db, cycle),
-                definedness: Definedness::PossiblyUndefined,
+                definedness: if cycle.iteration() <= 1 {
+                    current.definedness
+                } else {
+                    Definedness::PossiblyUndefined
+                },
                 ..current
             }),
             // If a `Place` that was `Defined(Divergent)` in the previous cycle is actually found to be unreachable in the current cycle,
@@ -836,10 +971,7 @@ impl<'db> PlaceAndQualifiers<'db> {
             }
             (Place::Undefined, Place::Undefined) => Place::Undefined,
         };
-        PlaceAndQualifiers {
-            place,
-            qualifiers: self.qualifiers,
-        }
+        PlaceAndQualifiers { place, qualifiers }
     }
 }
 
@@ -849,32 +981,13 @@ impl<'db> From<Place<'db>> for PlaceAndQualifiers<'db> {
     }
 }
 
-fn place_cycle_initial<'db>(
-    _db: &'db dyn Db,
-    id: salsa::Id,
-    _scope: ScopeId<'db>,
-    _place_id: ScopedPlaceId,
-    _requires_explicit_reexport: RequiresExplicitReExport,
-    _considered_definitions: ConsideredDefinitions,
-) -> PlaceAndQualifiers<'db> {
-    Place::bound(Type::divergent(id)).into()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn place_cycle_recover<'db>(
-    db: &'db dyn Db,
-    cycle: &salsa::Cycle,
-    previous_place: &PlaceAndQualifiers<'db>,
-    place: PlaceAndQualifiers<'db>,
-    _scope: ScopeId<'db>,
-    _place_id: ScopedPlaceId,
-    _requires_explicit_reexport: RequiresExplicitReExport,
-    _considered_definitions: ConsideredDefinitions,
-) -> PlaceAndQualifiers<'db> {
-    place.cycle_normalized(db, *previous_place, cycle)
-}
-
-#[salsa::tracked(cycle_fn=place_cycle_recover, cycle_initial=place_cycle_initial, heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(
+    cycle_initial=|_, id, _, _, _, _| Place::bound(Type::divergent(id)).into(),
+    cycle_fn=|db, cycle, previous: &PlaceAndQualifiers<'db>, place: PlaceAndQualifiers<'db>, _, _, _, _| {
+        place.cycle_normalized(db, *previous, cycle)
+    },
+    heap_size=ruff_memory_usage::heap_size
+)]
 pub(crate) fn place_by_id<'db>(
     db: &'db dyn Db,
     scope: ScopeId<'db>,
@@ -892,7 +1005,7 @@ pub(crate) fn place_by_id<'db>(
         ConsideredDefinitions::AllReachable => use_def.reachable_declarations(place_id),
     };
 
-    let declared = place_from_declarations_impl(db, declarations, requires_explicit_reexport)
+    let declared = place_from_declarations_impl(db, declarations, requires_explicit_reexport, None)
         .ignore_conflicting_declarations();
 
     let all_considered_bindings = || match considered_definitions {
@@ -904,7 +1017,7 @@ pub(crate) fn place_by_id<'db>(
     // inferred type, without unioning with `Unknown`, because it cannot be modified.
     if let Some(qualifiers) = declared.is_bare_final() {
         let bindings = all_considered_bindings();
-        return place_from_bindings_impl(db, bindings, requires_explicit_reexport)
+        return place_from_bindings_impl(db, bindings, requires_explicit_reexport, None)
             .place
             .with_qualifiers(qualifiers);
     }
@@ -918,29 +1031,33 @@ pub(crate) fn place_by_id<'db>(
                     ty: Type::Dynamic(DynamicType::Unknown),
                     origin,
                     definedness,
+                    provenance: declared_provenance,
                     ..
                 }),
             qualifiers,
         } if qualifiers.contains(TypeQualifiers::CLASS_VAR) => {
             let bindings = all_considered_bindings();
-            match place_from_bindings_impl(db, bindings, requires_explicit_reexport).place {
+            match place_from_bindings_impl(db, bindings, requires_explicit_reexport, None).place {
                 Place::Defined(DefinedPlace {
                     ty: inferred,
                     origin,
                     definedness: boundness,
+                    provenance: inferred_provenance,
                     ..
                 }) => Place::Defined(DefinedPlace {
-                    ty: UnionType::from_elements(db, [Type::unknown(), inferred]),
+                    ty: UnionType::from_two_elements(db, Type::unknown(), inferred),
                     origin,
                     definedness: boundness,
-                    widening: Widening::None,
+                    public_type_policy: PublicTypePolicy::Raw,
+                    provenance: inferred_provenance.or(declared_provenance),
                 })
                 .with_qualifiers(qualifiers),
                 Place::Undefined => Place::Defined(DefinedPlace {
                     ty: Type::unknown(),
                     origin,
                     definedness,
-                    widening: Widening::None,
+                    public_type_policy: PublicTypePolicy::Raw,
+                    provenance: declared_provenance,
                 })
                 .with_qualifiers(qualifiers),
             }
@@ -961,13 +1078,14 @@ pub(crate) fn place_by_id<'db>(
                     ty: declared_ty,
                     origin,
                     definedness: Definedness::PossiblyUndefined,
+                    provenance: declared_provenance,
                     ..
                 }),
             qualifiers,
         } => {
             let bindings = all_considered_bindings();
-            let boundness_analysis = bindings.boundness_analysis;
-            let inferred = place_from_bindings_impl(db, bindings, requires_explicit_reexport);
+            let boundness_analysis = bindings.boundness_analysis();
+            let inferred = place_from_bindings_impl(db, bindings, requires_explicit_reexport, None);
 
             let place = match inferred.place {
                 // Place is possibly undeclared and definitely unbound
@@ -979,7 +1097,8 @@ pub(crate) fn place_by_id<'db>(
                         ty: declared_ty,
                         origin,
                         definedness: Definedness::AlwaysDefined,
-                        widening: Widening::None,
+                        public_type_policy: PublicTypePolicy::Raw,
+                        provenance: declared_provenance,
                     })
                 }
                 // Place is possibly undeclared and (possibly) bound
@@ -987,16 +1106,18 @@ pub(crate) fn place_by_id<'db>(
                     ty: inferred_ty,
                     origin,
                     definedness: boundness,
+                    provenance: inferred_provenance,
                     ..
                 }) => Place::Defined(DefinedPlace {
-                    ty: UnionType::from_elements(db, [inferred_ty, declared_ty]),
+                    ty: UnionType::from_two_elements(db, inferred_ty, declared_ty),
                     origin,
                     definedness: if boundness_analysis == BoundnessAnalysis::AssumeBound {
                         Definedness::AlwaysDefined
                     } else {
                         boundness
                     },
-                    widening: Widening::None,
+                    public_type_policy: PublicTypePolicy::Raw,
+                    provenance: inferred_provenance.or(declared_provenance),
                 }),
             };
 
@@ -1008,9 +1129,9 @@ pub(crate) fn place_by_id<'db>(
             qualifiers: _,
         } => {
             let bindings = all_considered_bindings();
-            let boundness_analysis = bindings.boundness_analysis;
+            let boundness_analysis = bindings.boundness_analysis();
             let mut inferred =
-                place_from_bindings_impl(db, bindings, requires_explicit_reexport).place;
+                place_from_bindings_impl(db, bindings, requires_explicit_reexport, None).place;
 
             if boundness_analysis == BoundnessAnalysis::AssumeBound {
                 if let Place::Defined(defined) = inferred {
@@ -1024,8 +1145,8 @@ pub(crate) fn place_by_id<'db>(
             // `__slots__` is a symbol with special behavior in Python's runtime. It can be
             // modified externally, but those changes do not take effect. We therefore issue
             // a diagnostic if we see it being modified externally. In type inference, we
-            // can assign a "narrow" type to it even if it is not *declared*. This means, we
-            // do not have to union with `Unknown`.
+            // can assign a "narrow" type to it even if it is not *declared*. This means we do
+            // not have to adjust its public type.
             //
             // `TYPE_CHECKING` is a special variable that should only be assigned `False`
             // at runtime, but is always considered `True` in type checking.
@@ -1037,25 +1158,19 @@ pub(crate) fn place_by_id<'db>(
                 )
             });
 
-            // Module-level globals can be mutated externally. A `MY_CONSTANT = 1` global might
-            // be changed to `"some string"` from code outside of the module that we're looking
-            // at, and so from a gradual-guarantee perspective, it makes sense to infer a type
-            // of `Literal[1] | Unknown` for global symbols. This allows the code that does the
-            // mutation to type check correctly, and for code that uses the global, it accurately
-            // reflects the lack of knowledge about the type.
-            //
-            // However, external modifications (or modifications through `global` statements) that
-            // would require a wider type are relatively rare. From a practical perspective, we can
-            // therefore achieve a better user experience by trusting the inferred type. Users who
-            // need the external mutation to work can always annotate the global with the wider
-            // type. And everyone else benefits from more precise type inference.
+            // Module-level globals can be mutated externally, and strict application of the
+            // gradual guarantee would suggest that if not annotated, all such external mutations
+            // should be valid. However, external modifications (or modifications through `global`
+            // statements) that would require a different public type are relatively rare. From a
+            // practical perspective, we get a better user experience by trusting the inferred type
+            // by default, and only requiring annotation for the rare case.
             let is_module_global = scope.node(db).scope_kind().is_module();
 
-            // If the visibility of the scope is private (like for a function scope), we also do
-            // not union with `Unknown`, because the symbol cannot be modified externally.
+            // If the visibility of the scope is private (like for a function scope), we also keep
+            // the raw type, because the symbol cannot be modified externally.
             let scope_has_private_visibility = scope.scope(db).visibility().is_private();
 
-            // We generally trust undeclared places in stubs and do not union with `Unknown`.
+            // We generally trust undeclared places in stubs and expose the raw type.
             let in_stub_file = scope.file(db).is_stub(db);
 
             if is_considered_non_modifiable
@@ -1065,10 +1180,12 @@ pub(crate) fn place_by_id<'db>(
             {
                 inferred.into()
             } else {
-                // Gradual typing guarantee: Mark undeclared public symbols for widening.
-                // The actual union with `Unknown` is applied lazily when converting to
-                // LookupResult via `into_lookup_result`.
-                inferred.with_widening(Widening::WithUnknown).into()
+                // Public inferred types should expose a promoted view rather than their raw
+                // inferred literal form. The adjustment is applied lazily when converting to
+                // `LookupResult` via `into_lookup_result`.
+                inferred
+                    .with_public_type_policy(PublicTypePolicy::Promote)
+                    .into()
             }
         }
     }
@@ -1089,6 +1206,71 @@ pub(crate) fn place_by_id<'db>(
     // every path has either a binding or a declaration for it.)
 }
 
+enum DeclarationsBoundnessEvaluator<'map, 'db> {
+    AssumeBound,
+    BasedOnUnboundVisibility {
+        reachability_cache: Option<&'map ReachabilityEvaluationCache<'db>>,
+        unbound_visibility: Option<DeclarationWithConstraint<'db>>,
+        reachability_constraints: &'map ReachabilityConstraints,
+        predicates: &'map IndexSlice<ScopedPredicateId, Predicate<'db>>,
+        requires_explicit_reexport: RequiresExplicitReExport,
+    },
+}
+
+impl<'db> DeclarationsBoundnessEvaluator<'_, 'db> {
+    fn evaluate(self, db: &'db dyn Db, all_declarations_definitely_reachable: bool) -> Definedness {
+        match self {
+            DeclarationsBoundnessEvaluator::AssumeBound => {
+                if all_declarations_definitely_reachable {
+                    Definedness::AlwaysDefined
+                } else {
+                    // For declarations, it is important to consider the possibility that they might only
+                    // be bound in one control flow path, while the other path contains a binding. In order
+                    // to even consider the bindings as well in `place_by_id`, we return `PossiblyUndefined`
+                    // here.
+                    Definedness::PossiblyUndefined
+                }
+            }
+            DeclarationsBoundnessEvaluator::BasedOnUnboundVisibility {
+                reachability_cache,
+                reachability_constraints,
+                unbound_visibility,
+                predicates,
+                requires_explicit_reexport,
+            } => {
+                let undeclared_reachability = match unbound_visibility {
+                    Some(DeclarationWithConstraint {
+                        declaration,
+                        reachability_constraint,
+                        ..
+                    }) if declaration.is_undefined_or(|def| {
+                        is_non_exported(db, def, requires_explicit_reexport)
+                    }) =>
+                    {
+                        evaluate_reachability_with_cache(
+                            db,
+                            reachability_cache,
+                            reachability_constraints,
+                            predicates,
+                            reachability_constraint,
+                        )
+                    }
+                    _ => Truthiness::AlwaysFalse,
+                };
+                match undeclared_reachability {
+                    Truthiness::AlwaysTrue => {
+                        unreachable!(
+                            "If we have at least one declaration, the implicit `unbound` binding should not be definitely visible"
+                        )
+                    }
+                    Truthiness::AlwaysFalse => Definedness::AlwaysDefined,
+                    Truthiness::Ambiguous => Definedness::PossiblyUndefined,
+                }
+            }
+        }
+    }
+}
+
 /// Implementation of [`symbol`].
 fn symbol_impl<'db>(
     db: &'db dyn Db,
@@ -1099,13 +1281,34 @@ fn symbol_impl<'db>(
 ) -> PlaceAndQualifiers<'db> {
     let _span = tracing::trace_span!("symbol", ?name).entered();
 
-    if name == "platform"
-        && file_to_module(db, scope.file(db))
-            .is_some_and(|module| module.is_known(db, KnownModule::Sys))
-    {
+    let is_known_module = |known_module| {
+        file_to_module(db, scope.file(db)).is_some_and(|module| module.is_known(db, known_module))
+    };
+
+    // Check the symbol name first to avoid a module-resolution query for every symbol lookup.
+    if matches!(name, "version_info" | "platform") && is_known_module(KnownModule::Sys) {
+        match name {
+            "version_info" => {
+                return Place::bound(Type::sys_version_info()).into();
+            }
+            "platform" => match Program::get(db).python_platform(db) {
+                crate::PythonPlatform::Identifier(platform) => {
+                    return Place::bound(Type::string_literal(db, platform.as_str())).into();
+                }
+                crate::PythonPlatform::All => {
+                    // Fall through to the looked up type
+                }
+            },
+            _ => {}
+        }
+    }
+
+    if name == "name" && is_known_module(KnownModule::Os) {
         match Program::get(db).python_platform(db) {
             crate::PythonPlatform::Identifier(platform) => {
-                return Place::bound(Type::string_literal(db, platform.as_str())).into();
+                // In CPython, `os.name` is `"nt"` on Windows and `"posix"` otherwise.
+                let os_name = if platform == "win32" { "nt" } else { "posix" };
+                return Place::bound(Type::string_literal(db, os_name)).into();
             }
             crate::PythonPlatform::All => {
                 // Fall through to the looked up type
@@ -1127,27 +1330,134 @@ fn symbol_impl<'db>(
         .unwrap_or_default()
 }
 
-fn place_impl<'db>(
+/// Pre-computed reachability analysis for loop-back bindings in a loop header.
+#[salsa::tracked(
+    cycle_initial=|db, _, definition| loop_header_reachability_impl(db, definition, true),
+    cycle_fn=loop_header_reachability_cycle_recover,
+    heap_size = ruff_memory_usage::heap_size,
+)]
+pub(crate) fn loop_header_reachability<'db>(
     db: &'db dyn Db,
-    scope: ScopeId<'db>,
-    place: PlaceExprRef,
-    requires_explicit_reexport: RequiresExplicitReExport,
-    considered_definitions: ConsideredDefinitions,
-) -> PlaceAndQualifiers<'db> {
-    let _span = tracing::trace_span!("place_impl", ?place).entered();
+    definition: Definition<'db>,
+) -> LoopHeaderReachability<'db> {
+    loop_header_reachability_impl(db, definition, false)
+}
 
-    place_table(db, scope)
-        .place_id(place)
-        .map(|place| {
-            place_by_id(
-                db,
-                scope,
-                place,
-                requires_explicit_reexport,
-                considered_definitions,
-            )
-        })
-        .unwrap_or_default()
+fn loop_header_reachability_cycle_recover<'db>(
+    _db: &'db dyn Db,
+    cycle: &salsa::Cycle,
+    previous: &LoopHeaderReachability<'db>,
+    result: LoopHeaderReachability<'db>,
+    _definition: Definition<'db>,
+) -> LoopHeaderReachability<'db> {
+    result.cycle_normalized(previous, cycle)
+}
+
+fn loop_header_reachability_impl<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+    is_cycle_initial: bool,
+) -> LoopHeaderReachability<'db> {
+    // This cutoff was chosen by benchmarking real isort to keep loop analysis
+    // overhead minimal while preserving diagnostics.
+    const MAX_EXACT_LOOP_HEADER_REACHABILITY_NODES: usize = 2048;
+
+    let DefinitionKind::LoopHeader(loop_header_definition) = definition.kind(db) else {
+        unreachable!("`loop_header_reachability` called with non-loop-header definition");
+    };
+
+    let scope = definition.scope(db);
+    let use_def = use_def_map(db, scope);
+    let loop_header = get_loop_header(db, loop_header_definition.loop_token());
+    let place = loop_header_definition.place();
+
+    let mut deleted_reachability = Truthiness::AlwaysFalse;
+    let mut reachable_bindings = FxIndexSet::default();
+    let live_bindings: Vec<_> = loop_header.bindings_for_place(place).collect();
+    let use_exact_reachability = use_def.reachability_constraints().used_interiors().len()
+        <= MAX_EXACT_LOOP_HEADER_REACHABILITY_NODES;
+
+    for live_binding in live_bindings {
+        let reachability = if is_cycle_initial {
+            Truthiness::Ambiguous
+        } else if use_exact_reachability {
+            evaluate_reachability(db, use_def, live_binding.reachability_constraint())
+        } else if live_binding.reachability_constraint()
+            == ScopedReachabilityConstraintId::ALWAYS_FALSE
+        {
+            Truthiness::AlwaysFalse
+        } else {
+            Truthiness::Ambiguous
+        };
+        // Skip unreachable bindings.
+        if reachability.is_always_false() {
+            continue;
+        }
+
+        match use_def.definition(live_binding.binding()) {
+            DefinitionState::Defined(def) => {
+                debug_assert_ne!(
+                    def, definition,
+                    "loop headers only include bindings from within the loop"
+                );
+                reachable_bindings.insert(ReachableLoopBinding {
+                    definition: def,
+                    narrowing_constraint: live_binding.narrowing_constraint(),
+                });
+            }
+            // `del` in the loop body is always visible to code after the loop via the
+            // normal control flow merge. Updating `deleted_reachability` here is
+            // necessary for prior uses in the loop to see it.
+            DefinitionState::Deleted => {
+                deleted_reachability = deleted_reachability.or(reachability);
+            }
+            DefinitionState::Undefined => {
+                unreachable!("loop headers only include bindings from within the loop")
+            }
+        }
+    }
+
+    LoopHeaderReachability {
+        deleted_reachability,
+        reachable_bindings,
+    }
+}
+
+/// Result of [`loop_header_reachability`]: pre-computed reachability info for loop-back bindings.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+pub(crate) struct LoopHeaderReachability<'db> {
+    pub(crate) deleted_reachability: Truthiness,
+    /// Reachable loop-back bindings that are not `del`s.
+    pub(crate) reachable_bindings: FxIndexSet<ReachableLoopBinding<'db>>,
+}
+
+impl<'db> LoopHeaderReachability<'db> {
+    fn cycle_normalized(
+        self,
+        previous: &LoopHeaderReachability<'db>,
+        cycle: &salsa::Cycle,
+    ) -> LoopHeaderReachability<'db> {
+        // Avoid losing precision for cycles that are soon to converge.
+        // See [`Type::cycle_normalized`] for more details.
+        let reachable_bindings = if cycle.iteration() <= crate::TAINTED_CYCLES {
+            self.reachable_bindings
+        } else {
+            let previous_bindings = previous.reachable_bindings.iter().copied();
+            previous_bindings.chain(self.reachable_bindings).collect()
+        };
+
+        LoopHeaderReachability {
+            deleted_reachability: self.deleted_reachability,
+            reachable_bindings,
+        }
+    }
+}
+
+/// A single reachable loop-back binding with its narrowing constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+pub(crate) struct ReachableLoopBinding<'db> {
+    pub(crate) definition: Definition<'db>,
+    pub(crate) narrowing_constraint: ScopedNarrowingConstraint,
 }
 
 /// Implementation of [`place_from_bindings`].
@@ -1159,10 +1469,11 @@ fn place_from_bindings_impl<'db>(
     db: &'db dyn Db,
     bindings_with_constraints: BindingWithConstraintsIterator<'_, 'db>,
     requires_explicit_reexport: RequiresExplicitReExport,
+    reachability_cache: Option<&ReachabilityEvaluationCache<'db>>,
 ) -> PlaceWithDefinition<'db> {
-    let predicates = bindings_with_constraints.predicates;
-    let reachability_constraints = bindings_with_constraints.reachability_constraints;
-    let boundness_analysis = bindings_with_constraints.boundness_analysis;
+    let predicates = bindings_with_constraints.predicates();
+    let reachability_constraints = bindings_with_constraints.reachability_constraints();
+    let boundness_analysis = bindings_with_constraints.boundness_analysis();
     let mut bindings_with_constraints = bindings_with_constraints.peekable();
 
     let is_non_exported = |binding: Definition<'db>| {
@@ -1173,7 +1484,7 @@ fn place_from_bindings_impl<'db>(
         Some(BindingWithConstraints {
             binding,
             reachability_constraint,
-            narrowing_constraint: _,
+            ..
         }) if binding.is_undefined_or(is_non_exported) => Some(*reachability_constraint),
         _ => None,
     };
@@ -1184,27 +1495,51 @@ fn place_from_bindings_impl<'db>(
     // expressions, which is extra work and can lead to cycles.
     let unbound_visibility = || {
         unbound_reachability_constraint.map(|reachability_constraint| {
-            reachability_constraints.evaluate(db, predicates, reachability_constraint)
+            evaluate_reachability_with_cache(
+                db,
+                reachability_cache,
+                reachability_constraints,
+                predicates,
+                reachability_constraint,
+            )
         })
     };
 
     let mut first_definition = None;
+    let mut provenance = Provenance::Unknown;
+    // special handling for synthetic loop header definitions and nested bindings definitions
+    let mut only_non_shadowing_bindings = true;
 
     let mut types = bindings_with_constraints.filter_map(
         |BindingWithConstraints {
              binding,
              narrowing_constraint,
              reachability_constraint,
+             ..
          }| {
             let binding = match binding {
+                DefinitionState::Defined(binding)
+                    if is_discarded_dict_key_assignment(db, binding) =>
+                {
+                    // This synthesized `d[key] = value` binding was derived from an assignment such
+                    // as `d = {key: value}`. If the RHS is not known to be stored unchanged, discard
+                    // the binding so that lookup of `d[key]` can fall back to `d`.
+                    return None;
+                }
                 DefinitionState::Defined(binding) => binding,
                 DefinitionState::Undefined => {
                     return None;
                 }
                 DefinitionState::Deleted => {
-                    deleted_reachability = deleted_reachability.or(
-                        reachability_constraints.evaluate(db, predicates, reachability_constraint)
-                    );
+                    deleted_reachability = deleted_reachability.or_else(|| {
+                        evaluate_reachability_with_cache(
+                            db,
+                            reachability_cache,
+                            reachability_constraints,
+                            predicates,
+                            reachability_constraint,
+                        )
+                    });
                     return None;
                 }
             };
@@ -1213,8 +1548,13 @@ fn place_from_bindings_impl<'db>(
                 return None;
             }
 
-            let static_reachability =
-                reachability_constraints.evaluate(db, predicates, reachability_constraint);
+            let static_reachability = evaluate_reachability_with_cache(
+                db,
+                reachability_cache,
+                reachability_constraints,
+                predicates,
+                reachability_constraint,
+            );
 
             if static_reachability.is_always_false() {
                 // If the static reachability evaluates to false, the binding is either not reachable
@@ -1265,25 +1605,49 @@ fn place_from_bindings_impl<'db>(
                 // `Never` will be eliminated automatically.
 
                 if unbound_visibility().is_none_or(Truthiness::is_always_false) {
-                    return Some(Type::Never);
+                    return Some((Type::Never, static_reachability));
                 }
                 return None;
             }
 
+            // We need to "look through" loop header definitions to do boundness analysis. The
+            // actual type is computed by `infer_loop_header_definition` via `binding_type` below,
+            // like all other bindings, so that it can participate in fixpoint iteration.
+            if binding.kind(db).is_loop_header() {
+                let loop_header = loop_header_reachability(db, binding);
+                deleted_reachability = deleted_reachability.or(loop_header.deleted_reachability);
+                // If all the bindings in the loop are in statically false branches, it might be
+                // that none of them loop-back. In that case short-circuit, so that we don't
+                // produce an `Unknown` fallback type, and so that `Place::Undefined` is still a
+                // possibility below.
+                if loop_header.reachable_bindings.is_empty() {
+                    return None;
+                }
+            } else if matches!(binding.kind(db), DefinitionKind::NestedBindings(_)) {
+                // Nested bindings definitions similar to loop header definitions, synthetic
+                // bindings with special shadowing behavior. They can also coexist with `UNBOUND`.
+            } else {
+                only_non_shadowing_bindings = false;
+            }
+
             first_definition.get_or_insert(binding);
+            provenance = provenance.or(Provenance::SingleDefinition(binding));
             let binding_ty = binding_type(db, binding);
-            Some(narrowing_constraint.narrow(db, binding_ty, binding.place(db)))
+            Some((
+                narrowing_constraint.narrow(db, binding_ty, binding.place(db)),
+                static_reachability,
+            ))
         },
     );
 
-    let place = if let Some(first) = types.next() {
-        let ty = if let Some(second) = types.next() {
+    let place = if let Some((first, first_reachability)) = types.next() {
+        let ty = if let Some((second, second_reachability)) = types.next() {
             let mut builder = PublicTypeBuilder::new(db);
-            builder.add(first);
-            builder.add(second);
+            builder.add(first, first_reachability);
+            builder.add(second, second_reachability);
 
-            for ty in types {
-                builder.add(ty);
+            for (ty, reachability) in types {
+                builder.add(ty, reachability);
             }
 
             builder.build()
@@ -1294,6 +1658,12 @@ fn place_from_bindings_impl<'db>(
         let boundness = match boundness_analysis {
             BoundnessAnalysis::AssumeBound => Definedness::AlwaysDefined,
             BoundnessAnalysis::BasedOnUnboundVisibility => match unbound_visibility() {
+                Some(Truthiness::AlwaysTrue) if only_non_shadowing_bindings => {
+                    // Loop header and nested binding definitions don't shadow prior bindings, so
+                    // UNBOUND can still be definitely-visible alongside them. See "Use with loop
+                    // header and also `UNBOUND` definitely visible" in `while_loop.md`.
+                    Definedness::PossiblyUndefined
+                }
                 Some(Truthiness::AlwaysTrue) => {
                     unreachable!(
                         "If we have at least one binding, the implicit `unbound` binding should not be definitely visible"
@@ -1305,12 +1675,16 @@ fn place_from_bindings_impl<'db>(
         };
 
         match deleted_reachability {
-            Truthiness::AlwaysFalse => {
-                Place::Defined(DefinedPlace::new(ty).with_definedness(boundness))
-            }
+            Truthiness::AlwaysFalse => Place::Defined(
+                DefinedPlace::new(ty)
+                    .with_definedness(boundness)
+                    .with_provenance(provenance),
+            ),
             Truthiness::AlwaysTrue => Place::Undefined,
             Truthiness::Ambiguous => Place::Defined(
-                DefinedPlace::new(ty).with_definedness(Definedness::PossiblyUndefined),
+                DefinedPlace::new(ty)
+                    .with_definedness(Definedness::PossiblyUndefined)
+                    .with_provenance(provenance),
             ),
         }
     } else {
@@ -1331,7 +1705,7 @@ pub(super) struct PlaceWithDefinition<'db> {
 /// Accumulates types from multiple bindings or declarations, and eventually builds a
 /// union type from them.
 ///
-/// `@overload`ed function literal types are discarded if they are immediately followed
+/// `@overload`ed function literal types are discarded if they are definitely followed
 /// by their implementation. This is to ensure that we do not merge all of them into the
 /// union type. The last one will include the other overloads already.
 struct PublicTypeBuilder<'db> {
@@ -1359,18 +1733,42 @@ impl<'db> PublicTypeBuilder<'db> {
         }
     }
 
-    fn add(&mut self, element: Type<'db>) -> bool {
+    fn add(&mut self, element: Type<'db>, reachability: Truthiness) -> bool {
         match element {
             Type::FunctionLiteral(function) => {
-                if function
-                    .literal(self.db)
-                    .last_definition(self.db)
-                    .is_overload(self.db)
-                {
+                let last_definition = function.literal(self.db).last_definition;
+                if last_definition.is_overload(self.db) {
+                    // Distinct overloaded function values can be assigned to the same public
+                    // symbol in separate branches. Preserve the queued value unless the next
+                    // overload belongs to the same place.
+                    if !self.queue.is_some_and(|queued| {
+                        let Type::FunctionLiteral(queued_function) = queued else {
+                            return false;
+                        };
+                        function.has_same_place_as(self.db, queued_function)
+                    }) {
+                        self.drain_queue();
+                    }
+
                     self.queue = Some(element);
                     false
                 } else {
-                    self.queue = None;
+                    // An unconditional implementation shadows preceding overload definitions. A
+                    // conditional definition, however, can be only one public possibility among
+                    // several, so keep any unrelated queued overloaded function in the union.
+                    if reachability.is_always_true()
+                        || self.queue.is_some_and(|queued| {
+                            let Type::FunctionLiteral(queued_function) = queued else {
+                                return false;
+                            };
+                            let queued_definition = queued_function.last_definition(self.db);
+                            function.contains_definition(self.db, queued_definition)
+                        })
+                    {
+                        self.queue = None;
+                    } else {
+                        self.drain_queue();
+                    }
                     self.add_to_union(element);
                     true
                 }
@@ -1408,10 +1806,10 @@ impl<'db> DeclaredTypeBuilder<'db> {
         }
     }
 
-    fn add(&mut self, element: TypeAndQualifiers<'db>) {
+    fn add(&mut self, element: TypeAndQualifiers<'db>, reachability: Truthiness) {
         let element_ty = element.inner_type();
 
-        if self.inner.add(element_ty) {
+        if self.inner.add(element_ty, reachability) {
             if let Some(first_ty) = self.first_type {
                 if !first_ty.is_equivalent_to(self.inner.db, element_ty) {
                     self.conflicting_types.insert(element_ty);
@@ -1450,100 +1848,95 @@ impl<'db> DeclaredTypeBuilder<'db> {
 /// access any AST nodes from the file containing the declarations.
 fn place_from_declarations_impl<'db>(
     db: &'db dyn Db,
-    declarations: DeclarationsIterator<'_, 'db>,
+    declarations_iterator: DeclarationsIterator<'_, 'db>,
     requires_explicit_reexport: RequiresExplicitReExport,
+    reachability_cache: Option<&ReachabilityEvaluationCache<'db>>,
 ) -> PlaceFromDeclarationsResult<'db> {
-    let predicates = declarations.predicates;
-    let reachability_constraints = declarations.reachability_constraints;
-    let boundness_analysis = declarations.boundness_analysis;
-    let mut declarations = declarations.peekable();
-    let mut first_declaration = None;
+    let predicates = declarations_iterator.predicates();
+    let reachability_constraints = declarations_iterator.reachability_constraints();
+    let boundness_analysis = declarations_iterator.boundness_analysis();
 
-    let is_non_exported = |declaration: Definition<'db>| {
-        requires_explicit_reexport.is_yes() && !is_reexported(db, declaration)
-    };
+    let declarations;
 
-    let undeclared_reachability = match declarations.peek() {
-        Some(DeclarationWithConstraint {
-            declaration,
-            reachability_constraint,
-        }) if declaration.is_undefined_or(is_non_exported) => {
-            reachability_constraints.evaluate(db, predicates, *reachability_constraint)
+    let boundness_evaluator = match boundness_analysis {
+        BoundnessAnalysis::AssumeBound => {
+            declarations = Either::Left(declarations_iterator);
+            DeclarationsBoundnessEvaluator::AssumeBound
         }
-        _ => Truthiness::AlwaysFalse,
+        BoundnessAnalysis::BasedOnUnboundVisibility => {
+            let mut declarations_iterator = declarations_iterator.peekable();
+            let unbound_visibility = declarations_iterator.peek().cloned();
+            declarations = Either::Right(declarations_iterator);
+            DeclarationsBoundnessEvaluator::BasedOnUnboundVisibility {
+                reachability_cache,
+                unbound_visibility,
+                predicates,
+                reachability_constraints,
+                requires_explicit_reexport,
+            }
+        }
     };
 
+    let mut first_declaration = None;
+    let mut provenance = Provenance::Unknown;
     let mut all_declarations_definitely_reachable = true;
 
-    let mut types = declarations.filter_map(
-        |DeclarationWithConstraint {
-             declaration,
-             reachability_constraint,
-         }| {
-            let DefinitionState::Defined(declaration) = declaration else {
-                return None;
-            };
+    let mut types = declarations.filter_map(|declaration_with_constraint| {
+        let DeclarationWithConstraint {
+            declaration,
+            reachability_constraint,
+            ..
+        } = declaration_with_constraint;
 
-            if is_non_exported(declaration) {
-                return None;
-            }
+        let DefinitionState::Defined(declaration) = declaration else {
+            return None;
+        };
 
+        if is_non_exported(db, declaration, requires_explicit_reexport) {
+            return None;
+        }
+
+        let static_reachability = evaluate_reachability_with_cache(
+            db,
+            reachability_cache,
+            reachability_constraints,
+            predicates,
+            reachability_constraint,
+        );
+
+        if static_reachability.is_always_false() {
+            None
+        } else {
+            let declared_type = inferred_declaration(db, declaration).declared()?;
             first_declaration.get_or_insert(declaration);
+            provenance = provenance.or(Provenance::SingleDefinition(declaration));
+            all_declarations_definitely_reachable =
+                all_declarations_definitely_reachable && static_reachability.is_always_true();
 
-            let static_reachability =
-                reachability_constraints.evaluate(db, predicates, reachability_constraint);
+            Some((declared_type, static_reachability))
+        }
+    });
 
-            if static_reachability.is_always_false() {
-                None
-            } else {
-                all_declarations_definitely_reachable =
-                    all_declarations_definitely_reachable && static_reachability.is_always_true();
-
-                Some(declaration_type(db, declaration))
-            }
-        },
-    );
-
-    if let Some(first) = types.next() {
-        let (declared, conflicting) = if let Some(second) = types.next() {
+    if let Some((first, first_reachability)) = types.next() {
+        let (declared, conflicting) = if let Some((second, second_reachability)) = types.next() {
             let mut builder = DeclaredTypeBuilder::new(db);
-            builder.add(first);
-            builder.add(second);
-            for element in types {
-                builder.add(element);
+            builder.add(first, first_reachability);
+            builder.add(second, second_reachability);
+            for (element, reachability) in types {
+                builder.add(element, reachability);
             }
             builder.build()
         } else {
             (first, None)
         };
 
-        let boundness = match boundness_analysis {
-            BoundnessAnalysis::AssumeBound => {
-                if all_declarations_definitely_reachable {
-                    Definedness::AlwaysDefined
-                } else {
-                    // For declarations, it is important to consider the possibility that they might only
-                    // be bound in one control flow path, while the other path contains a binding. In order
-                    // to even consider the bindings as well in `place_by_id`, we return `PossiblyUnbound`
-                    // here.
-                    Definedness::PossiblyUndefined
-                }
-            }
-            BoundnessAnalysis::BasedOnUnboundVisibility => match undeclared_reachability {
-                Truthiness::AlwaysTrue => {
-                    unreachable!(
-                        "If we have at least one declaration, the implicit `unbound` binding should not be definitely visible"
-                    )
-                }
-                Truthiness::AlwaysFalse => Definedness::AlwaysDefined,
-                Truthiness::Ambiguous => Definedness::PossiblyUndefined,
-            },
-        };
+        let boundness = boundness_evaluator.evaluate(db, all_declarations_definitely_reachable);
 
         let place_and_quals = Place::Defined(
             DefinedPlace::new(declared.inner_type())
                 .with_origin(TypeOrigin::Declared)
-                .with_definedness(boundness),
+                .with_definedness(boundness)
+                .with_provenance(provenance),
         )
         .with_qualifiers(declared.qualifiers());
 
@@ -1559,6 +1952,14 @@ fn place_from_declarations_impl<'db>(
     } else {
         PlaceFromDeclarationsResult::default()
     }
+}
+
+fn is_non_exported<'db>(
+    db: &'db dyn Db,
+    declaration: Definition<'db>,
+    requires_explicit_reexport: RequiresExplicitReExport,
+) -> bool {
+    requires_explicit_reexport.is_yes() && !is_reexported(db, declaration)
 }
 
 // Returns `true` if the `definition` is re-exported.
@@ -1583,17 +1984,19 @@ fn is_reexported(db: &dyn Db, definition: Definition<'_>) -> bool {
     all_names.contains(symbol_name)
 }
 
-mod implicit_globals {
+pub(crate) mod implicit_globals {
     use ruff_python_ast as ast;
     use ruff_python_ast::name::Name;
 
     use crate::Program;
     use crate::db::Db;
     use crate::place::{Definedness, PlaceAndQualifiers};
-    use crate::semantic_index::symbol::Symbol;
-    use crate::semantic_index::{place_table, use_def_map};
-    use crate::types::{KnownClass, MemberLookupPolicy, Parameter, Parameters, Signature, Type};
+    use crate::types::{
+        ClassLiteral, KnownClass, MemberLookupPolicy, Parameter, Parameters, Signature, Type,
+    };
     use ruff_python_ast::PythonVersion;
+    use ty_python_core::symbol::Symbol;
+    use ty_python_core::{place_table, use_def_map};
 
     use super::{DefinedPlace, Place, place_from_declarations};
 
@@ -1611,7 +2014,10 @@ mod implicit_globals {
         else {
             return Place::Undefined.into();
         };
-        let module_type_scope = module_type_class.body_scope(db);
+        let Some(class) = module_type_class.as_static() else {
+            return Place::Undefined.into();
+        };
+        let module_type_scope = class.body_scope(db);
         let place_table = place_table(db, module_type_scope);
         let Some(symbol_id) = place_table.symbol_id(name) else {
             return Place::Undefined.into();
@@ -1726,10 +2132,10 @@ mod implicit_globals {
     /// so the cost of hashing the names is likely to be more expensive than it's worth.
     #[salsa::tracked(
         returns(deref),
-        cycle_initial=module_type_symbols_initial,
+        cycle_initial=|_, _| smallvec::SmallVec::default(),
         heap_size=ruff_memory_usage::heap_size
     )]
-    fn module_type_symbols<'db>(db: &'db dyn Db) -> smallvec::SmallVec<[ast::name::Name; 8]> {
+    fn module_type_symbols(db: &dyn Db) -> smallvec::SmallVec<[ast::name::Name; 8]> {
         let Some(module_type) = KnownClass::ModuleType
             .to_class_literal(db)
             .as_class_literal()
@@ -1739,8 +2145,10 @@ mod implicit_globals {
             return smallvec::SmallVec::default();
         };
 
-        let module_type_scope = module_type.body_scope(db);
-        let module_type_symbol_table = place_table(db, module_type_scope);
+        let ClassLiteral::Static(module_type) = module_type else {
+            return smallvec::SmallVec::default();
+        };
+        let module_type_symbol_table = place_table(db, module_type.body_scope(db));
 
         module_type_symbol_table
             .symbols()
@@ -1756,11 +2164,30 @@ mod implicit_globals {
             .collect()
     }
 
-    fn module_type_symbols_initial(
-        _db: &dyn Db,
-        _id: salsa::Id,
-    ) -> smallvec::SmallVec<[ast::name::Name; 8]> {
-        smallvec::SmallVec::default()
+    /// Returns an iterator over all implicit module global symbols and their types.
+    ///
+    /// This is used for completions in the global scope of a module. It returns
+    /// the correct types for special-cased symbols like `__file__` (which is `str`
+    /// for the current module, not `str | None`).
+    pub(crate) fn all_implicit_module_globals(
+        db: &dyn Db,
+    ) -> impl Iterator<Item = (Name, Type<'_>)> + '_ {
+        // Special-cased implicit globals that are not in `module_type_symbols`
+        let special_cased = ["__builtins__", "__debug__", "__warningregistry__"]
+            .into_iter()
+            .map(Name::new_static);
+
+        // All symbols from ModuleType (already includes `__file__`, `__name__`, etc.)
+        let module_type_syms = module_type_symbols(db).iter().cloned();
+
+        // Combine and map to (name, type) pairs
+        special_cased
+            .chain(module_type_syms)
+            .filter_map(move |name| {
+                let place = module_type_implicit_global_symbol(db, name.as_str());
+                // Only include bound symbols
+                place.place.ignore_possibly_undefined().map(|ty| (name, ty))
+            })
     }
 
     #[cfg(test)]
@@ -1798,9 +2225,10 @@ pub(crate) fn class_body_implicit_symbol<'db>(
         "__qualname__" => Place::bound(KnownClass::Str.to_instance(db)).into(),
         "__module__" => Place::bound(KnownClass::Str.to_instance(db)).into(),
         // __doc__ is `str` if there's a docstring, `None` if there isn't
-        "__doc__" => Place::bound(UnionType::from_elements(
+        "__doc__" => Place::bound(UnionType::from_two_elements(
             db,
-            [KnownClass::Str.to_instance(db), Type::none(db)],
+            KnownClass::Str.to_instance(db),
+            Type::none(db),
         ))
         .into(),
         // __firstlineno__ was added in Python 3.13
@@ -1845,26 +2273,6 @@ pub(crate) enum ConsideredDefinitions {
     AllReachable,
 }
 
-/// Specifies how the boundness of a place should be determined.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub(crate) enum BoundnessAnalysis {
-    /// The place is always considered bound.
-    AssumeBound,
-    /// The boundness of the place is determined based on the visibility of the implicit
-    /// `unbound` binding. In the example below, when analyzing the visibility of the
-    /// `x = <unbound>` binding from the position of the end of the scope, it would be
-    /// `Truthiness::Ambiguous`, because it could either be visible or not, depending on the
-    /// `flag()` return value. This would result in a `Definedness::PossiblyUndefined` for `x`.
-    ///
-    /// ```py
-    /// x = <unbound>
-    ///
-    /// if flag():
-    ///     x = 1
-    /// ```
-    BasedOnUnboundVisibility,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1876,8 +2284,8 @@ mod tests {
         use TypeOrigin::Inferred;
 
         let db = setup_db();
-        let ty1 = Type::IntLiteral(1);
-        let ty2 = Type::IntLiteral(2);
+        let ty1 = Type::int_literal(1);
+        let ty2 = Type::int_literal(2);
 
         let unbound = || PlaceAndQualifiers::default();
 
@@ -1886,7 +2294,8 @@ mod tests {
                 ty: ty1,
                 origin: Inferred,
                 definedness: PossiblyUndefined,
-                widening: Widening::None,
+                public_type_policy: PublicTypePolicy::Raw,
+                provenance: Provenance::Unknown,
             })
             .with_qualifiers(TypeQualifiers::empty())
         };
@@ -1895,7 +2304,8 @@ mod tests {
                 ty: ty2,
                 origin: Inferred,
                 definedness: PossiblyUndefined,
-                widening: Widening::None,
+                public_type_policy: PublicTypePolicy::Raw,
+                provenance: Provenance::Unknown,
             })
             .with_qualifiers(TypeQualifiers::empty())
         };
@@ -1905,7 +2315,8 @@ mod tests {
                 ty: ty1,
                 origin: Inferred,
                 definedness: AlwaysDefined,
-                widening: Widening::None,
+                public_type_policy: PublicTypePolicy::Raw,
+                provenance: Provenance::Unknown,
             })
             .with_qualifiers(TypeQualifiers::empty())
         };
@@ -1914,7 +2325,8 @@ mod tests {
                 ty: ty2,
                 origin: Inferred,
                 definedness: AlwaysDefined,
-                widening: Widening::None,
+                public_type_policy: PublicTypePolicy::Raw,
+                provenance: Provenance::Unknown,
             })
             .with_qualifiers(TypeQualifiers::empty())
         };
@@ -1938,7 +2350,8 @@ mod tests {
                 ty: UnionType::from_elements(&db, [ty1, ty2]),
                 origin: Inferred,
                 definedness: PossiblyUndefined,
-                widening: Widening::None
+                public_type_policy: PublicTypePolicy::Raw,
+                provenance: Provenance::Unknown,
             })
             .into()
         );
@@ -1948,7 +2361,8 @@ mod tests {
                 ty: UnionType::from_elements(&db, [ty1, ty2]),
                 origin: Inferred,
                 definedness: AlwaysDefined,
-                widening: Widening::None
+                public_type_policy: PublicTypePolicy::Raw,
+                provenance: Provenance::Unknown,
             })
             .into()
         );

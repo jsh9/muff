@@ -1,15 +1,16 @@
-use std::{borrow::Cow, fmt::Formatter, path::Path, sync::Arc};
+use std::fmt::{Display, Formatter};
+use std::{borrow::Cow, path::Path, sync::Arc};
 
 use ruff_diagnostics::{Applicability, Fix};
 use ruff_source_file::{LineColumn, SourceCode, SourceFile};
 
 use ruff_annotate_snippets::Level as AnnotateLevel;
 use ruff_text_size::{Ranged, TextRange, TextSize};
+#[cfg(feature = "serde")]
+use serde::Serialize;
 
 pub use self::render::{
     DisplayDiagnostic, DisplayDiagnostics, DummyFileResolver, FileResolver, Input,
-    ceil_char_boundary,
-    github::{DisplayGithubDiagnostics, GithubRenderer},
 };
 use crate::cancellation::CancellationToken;
 use crate::{Db, files::File};
@@ -275,6 +276,11 @@ impl Diagnostic {
             .find(|ann| ann.is_primary)
     }
 
+    /// Returns all annotations in the order in which they were added.
+    pub fn annotations(&self) -> &[Annotation] {
+        &self.inner.annotations
+    }
+
     /// Returns a mutable borrow of all annotations of this diagnostic.
     pub fn annotations_mut(&mut self) -> impl Iterator<Item = &mut Annotation> {
         Arc::make_mut(&mut self.inner).annotations.iter_mut()
@@ -319,17 +325,7 @@ impl Diagnostic {
 
     /// Returns all annotations, skipping the first primary annotation.
     pub fn secondary_annotations(&self) -> impl Iterator<Item = &Annotation> {
-        let mut seen_primary = false;
-        self.inner.annotations.iter().filter(move |ann| {
-            if seen_primary {
-                true
-            } else if ann.is_primary {
-                seen_primary = true;
-                false
-            } else {
-                true
-            }
-        })
+        secondary_annotations(self.inner.annotations.iter())
     }
 
     pub fn sub_diagnostics(&self) -> &[SubDiagnostic] {
@@ -379,9 +375,8 @@ impl Diagnostic {
 
     /// Returns `true` if the diagnostic is [`fixable`](Diagnostic::fixable) and applies at the
     /// configured applicability level.
-    pub fn has_applicable_fix(&self, config: &DisplayDiagnosticConfig) -> bool {
-        self.fix()
-            .is_some_and(|fix| fix.applies(config.fix_applicability))
+    pub fn has_applicable_fix(&self, fix_applicability: Applicability) -> bool {
+        self.fix().is_some_and(|fix| fix.applies(fix_applicability))
     }
 
     pub fn documentation_url(&self) -> Option<&str> {
@@ -561,7 +556,7 @@ impl Ord for RenderingSortKey<'_> {
     // We sort diagnostics in a way that keeps them in source order
     // and grouped by file. After that, we fall back to severity
     // (with fatal messages sorting before info messages) and then
-    // finally the diagnostic ID.
+    // finally the diagnostic ID and concise message.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if let (Some(span1), Some(span2)) = (
             self.diagnostic.primary_span(),
@@ -588,7 +583,15 @@ impl Ord for RenderingSortKey<'_> {
         if order.is_ne() {
             return order;
         }
-        self.diagnostic.id().cmp(&other.diagnostic.id())
+        let order = self.diagnostic.id().cmp(&other.diagnostic.id());
+        if order.is_ne() {
+            return order;
+        }
+
+        self.diagnostic
+            .concise_message()
+            .to_str()
+            .cmp(&other.diagnostic.concise_message().to_str())
     }
 }
 
@@ -671,6 +674,11 @@ impl SubDiagnostic {
         &self.inner.annotations
     }
 
+    /// Returns all annotations, skipping the first primary annotation.
+    pub fn secondary_annotations(&self) -> impl Iterator<Item = &Annotation> {
+        secondary_annotations(self.inner.annotations.iter())
+    }
+
     /// Returns a mutable borrow of the annotations of this sub-diagnostic.
     pub fn annotations_mut(&mut self) -> impl Iterator<Item = &mut Annotation> {
         self.inner.annotations.iter_mut()
@@ -683,6 +691,18 @@ impl SubDiagnostic {
     /// was added to this diagnostic is returned.
     pub fn primary_annotation(&self) -> Option<&Annotation> {
         self.inner.annotations.iter().find(|ann| ann.is_primary)
+    }
+
+    /// Returns a reference to the primary span of this sub-diagnostic.
+    pub fn primary_span_ref(&self) -> Option<&Span> {
+        self.primary_annotation().map(Annotation::get_span)
+    }
+
+    /// Returns the primary message for this sub-diagnostic.
+    ///
+    /// A sub-diagnostic always has a message, but it may be empty.
+    pub fn primary_message(&self) -> &str {
+        self.inner.message.as_str()
     }
 
     /// Introspects this diagnostic and returns what kind of "primary" message
@@ -698,7 +718,7 @@ impl SubDiagnostic {
     /// cases, just converting it to a string (or printing it) will do what
     /// you want.
     pub fn concise_message(&self) -> ConciseMessage<'_> {
-        let main = self.inner.message.as_str();
+        let main = self.primary_message();
         let annotation = self
             .primary_annotation()
             .and_then(|ann| ann.get_message())
@@ -709,6 +729,10 @@ impl SubDiagnostic {
             ConciseMessage::Both { main, annotation }
         }
     }
+
+    pub fn severity(&self) -> SubDiagnosticSeverity {
+        self.inner.severity
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, get_size2::GetSize)]
@@ -716,6 +740,23 @@ struct SubDiagnosticInner {
     severity: SubDiagnosticSeverity,
     message: DiagnosticMessage,
     annotations: Vec<Annotation>,
+}
+
+/// Returns all annotations, skipping the first primary annotation.
+fn secondary_annotations<'a>(
+    annotations: impl Iterator<Item = &'a Annotation>,
+) -> impl Iterator<Item = &'a Annotation> {
+    let mut seen_primary = false;
+    annotations.filter(move |ann| {
+        if seen_primary {
+            true
+        } else if ann.is_primary {
+            seen_primary = true;
+            false
+        } else {
+            true
+        }
+    })
 }
 
 /// A pointer to a subsequence in the end user's input.
@@ -1034,11 +1075,17 @@ pub enum DiagnosticId {
     /// Use of a deprecated setting.
     DeprecatedSetting,
 
+    /// Use of a Python version that ty doesn't support.
+    UnsupportedPythonVersion,
+
     /// The code needs to be formatted.
     Unformatted,
 
     /// Use of an invalid command-line option.
     InvalidCliOption,
+
+    /// Experimental feature requires preview mode.
+    PreviewFeature,
 
     /// An internal assumption was violated.
     ///
@@ -1090,8 +1137,10 @@ impl DiagnosticId {
             DiagnosticId::UnnecessaryOverridesSection => "unnecessary-overrides-section",
             DiagnosticId::UselessOverridesSection => "useless-overrides-section",
             DiagnosticId::DeprecatedSetting => "deprecated-setting",
+            DiagnosticId::UnsupportedPythonVersion => "unsupported-python-version",
             DiagnosticId::Unformatted => "unformatted",
             DiagnosticId::InvalidCliOption => "invalid-cli-option",
+            DiagnosticId::PreviewFeature => "preview-feature",
             DiagnosticId::InternalError => "internal-error",
         }
     }
@@ -1259,6 +1308,8 @@ impl From<crate::files::FileRange> for Span {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash, get_size2::GetSize)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Severity {
     Info,
     Warning,
@@ -1314,9 +1365,24 @@ impl SubDiagnosticSeverity {
     }
 }
 
+impl Display for SubDiagnosticSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SubDiagnosticSeverity::Help => "help",
+            SubDiagnosticSeverity::Info => "info",
+            SubDiagnosticSeverity::Warning => "warning",
+            SubDiagnosticSeverity::Error => "error",
+            SubDiagnosticSeverity::Fatal => "fatal",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Configuration for rendering diagnostics.
 #[derive(Clone, Debug)]
 pub struct DisplayDiagnosticConfig {
+    /// The program name used in structured output formats (e.g., JUnit, GitHub).
+    program: &'static str,
     /// The format to use for diagnostic rendering.
     ///
     /// This uses the "full" format by default.
@@ -1325,6 +1391,10 @@ pub struct DisplayDiagnosticConfig {
     ///
     /// Disabled by default.
     color: bool,
+    /// Whether to anonymize line numbers in full diagnostic output.
+    ///
+    /// Disabled by default.
+    anonymized_line_numbers: bool,
     /// The number of non-empty lines to show around each snippet.
     ///
     /// NOTE: It seems like making this a property of rendering *could*
@@ -1334,11 +1404,12 @@ pub struct DisplayDiagnosticConfig {
     /// here for now as the most "sensible" place for it to live until
     /// we had more concrete use cases. ---AG
     context: usize,
+    /// The "merge window" for annotations.
+    ///
+    /// If two annotations have fewer than this number of lines between them,
+    /// they will be merged into a single annotation.
+    merge_window: usize,
     /// Whether to use preview formatting for Ruff diagnostics.
-    #[allow(
-        dead_code,
-        reason = "This is currently only used for JSON but will be needed soon for other formats"
-    )]
     preview: bool,
     /// Whether to hide the real `Severity` of diagnostics.
     ///
@@ -1358,6 +1429,23 @@ pub struct DisplayDiagnosticConfig {
 }
 
 impl DisplayDiagnosticConfig {
+    pub fn new(program: &'static str) -> DisplayDiagnosticConfig {
+        DisplayDiagnosticConfig {
+            program,
+            format: DiagnosticFormat::default(),
+            color: false,
+            anonymized_line_numbers: false,
+            context: 2,
+            merge_window: 2,
+            preview: false,
+            hide_severity: false,
+            show_fix_status: false,
+            show_fix_diff: false,
+            fix_applicability: Applicability::Safe,
+            cancellation_token: None,
+        }
+    }
+
     /// Whether to enable concise diagnostic output or not.
     pub fn format(self, format: DiagnosticFormat) -> DisplayDiagnosticConfig {
         DisplayDiagnosticConfig { format, ..self }
@@ -1368,10 +1456,29 @@ impl DisplayDiagnosticConfig {
         DisplayDiagnosticConfig { color: yes, ..self }
     }
 
+    /// Whether to anonymize line numbers in full diagnostic output.
+    pub fn anonymized_line_numbers(self, yes: bool) -> DisplayDiagnosticConfig {
+        DisplayDiagnosticConfig {
+            anonymized_line_numbers: yes,
+            ..self
+        }
+    }
+
     /// Set the number of contextual lines to show around each snippet.
     pub fn context(self, lines: usize) -> DisplayDiagnosticConfig {
         DisplayDiagnosticConfig {
             context: lines,
+            ..self
+        }
+    }
+
+    /// Set the "merge window" for annotations.
+    ///
+    /// If two annotations have fewer than this number of lines between them,
+    /// they will be merged into a single annotation.
+    pub fn merge_window(self, lines: usize) -> DisplayDiagnosticConfig {
+        DisplayDiagnosticConfig {
+            merge_window: lines,
             ..self
         }
     }
@@ -1382,6 +1489,10 @@ impl DisplayDiagnosticConfig {
             preview: yes,
             ..self
         }
+    }
+
+    pub fn preview_enabled(&self) -> bool {
+        self.preview
     }
 
     /// Whether to hide a diagnostic's severity or not.
@@ -1441,22 +1552,6 @@ impl DisplayDiagnosticConfig {
         self.cancellation_token
             .as_ref()
             .is_some_and(|token| token.is_cancelled())
-    }
-}
-
-impl Default for DisplayDiagnosticConfig {
-    fn default() -> DisplayDiagnosticConfig {
-        DisplayDiagnosticConfig {
-            format: DiagnosticFormat::default(),
-            color: false,
-            context: 2,
-            preview: false,
-            hide_severity: false,
-            show_fix_status: false,
-            show_fix_diff: false,
-            fix_applicability: Applicability::Safe,
-            cancellation_token: None,
-        }
     }
 }
 

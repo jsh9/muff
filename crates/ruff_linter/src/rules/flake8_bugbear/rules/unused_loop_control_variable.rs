@@ -96,6 +96,10 @@ pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::St
         finder.names
     };
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "iteration order does not affect the diagnostics or fixes produced"
+    )]
     for (name, expr) in control_names {
         // Ignore names that are already underscore-prefixed.
         if checker.settings().dummy_variable_rgx.is_match(name) {
@@ -134,6 +138,11 @@ pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::St
             },
             expr.range(),
         );
+
+        if certainty == Certainty::Certain {
+            diagnostic.add_primary_tag(ruff_db::diagnostic::DiagnosticTag::Unnecessary);
+        }
+
         if let Some(rename) = rename {
             if certainty == Certainty::Certain {
                 // Avoid fixing if the variable, or any future bindings to the variable, are
