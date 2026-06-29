@@ -19,6 +19,14 @@ ignored = ["jiff"]
 [package.metadata.dist]
 dist = true
 
+[[bin]]
+name = "ruff"
+path = "src/main.rs"
+
+[[bin]]
+name = "muff"
+path = "src/main.rs"
+
 [dependencies]
 ruff_cache = { workspace = true }
 ruff_db = { workspace = true, default-features = false, features = ["os"] }
