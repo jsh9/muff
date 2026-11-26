@@ -1,0 +1,276 @@
+# Build and release Muff.
+#
+# This workflow is specific to the Muff fork and replaces Ruff's `release.yml` for releases.
+# Ruff's release workflows run on Astral's paid runners (for example `depot-ubuntu-24.04-4`),
+# which are not available to this repository. This workflow only uses standard GitHub-hosted
+# runners, which are free for public repositories.
+#
+# How to release:
+#
+# 1. Merge `upstream/main` into `main` and push. The version comes from `pyproject.toml`, which
+#    is updated by the merge.
+# 2. Go to Actions -> "[muff] Release" -> "Run workflow" on `main`.
+#    - With "dry-run" checked, the workflow only builds and tests the wheels and binaries.
+#    - With "dry-run" unchecked, it also creates the GitHub release (tag = the version, e.g.
+#      `0.17.6`) and publishes the wheels and sdist to PyPI.
+#
+# PyPI publishing uses trusted publishing, so no API token is needed. The PyPI project must
+# list this repository, the workflow file `muff-release.yml`, and the environment `pypi` as a
+# trusted publisher.
+#
+# Pull requests that change this file run the build jobs (but never release or publish) so that
+# changes to the workflow can be tested before merging.
+name: "[muff] Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Only build and test; do not create a GitHub release or publish to PyPI"
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/muff-release.yml
+
+concurrency:
+  group: muff-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: "Read version from pyproject.toml"
+        id: version
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "Muff version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: "Prep README.md"
+        run: python scripts/transform_readme.py --target pypi
+      - name: "Build sdist"
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          sccache: false
+          maturin-version: v1.15.0
+          command: sdist
+          args: --out dist
+      - name: "Test sdist"
+        run: |
+          python -m pip install dist/muff-*.tar.gz --force-reinstall
+          muff --help
+          python -m ruff --help
+      - name: "Upload sdist"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-sdist
+          compression-level: 0
+          path: dist
+
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            manylinux: ""
+            docker-options: ""
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            manylinux: "2_17"
+            docker-options: ""
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            manylinux: "2_17"
+            # See https://github.com/astral-sh/ruff/issues/3791 and
+            # https://github.com/gnzlbg/jemallocator/issues/170#issuecomment-1503228963
+            docker-options: "-e JEMALLOC_SYS_WITH_LG_PAGE=16"
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            manylinux: ""
+            docker-options: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: "Prep README.md"
+        run: python scripts/transform_readme.py --target pypi
+      - name: "Build wheel"
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          sccache: false
+          maturin-version: v1.15.0
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          docker-options: ${{ matrix.docker-options }}
+          args: --release --locked --out dist --compatibility pypi
+      - name: "Test wheel"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install dist/muff-*.whl --force-reinstall
+          muff --help > /dev/null
+          python -m ruff --help > /dev/null
+
+          # Check that the formatter adds the extra level of indentation to function parameters,
+          # which is the one behavior that distinguishes Muff from Ruff.
+          printf 'def f(argument_number_one, argument_number_two, argument_number_three, argument_number_four):\n    pass\n' \
+            | muff format --isolated - > formatted.py
+          cat formatted.py
+          grep -qx '        argument_number_one,' formatted.py
+      - name: "Upload wheel"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.target }}
+          compression-level: 0
+          path: dist
+      - name: "Archive binary"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          exe=""
+          if [[ "${TARGET}" == *windows* ]]; then
+            exe=".exe"
+          fi
+
+          archive_name="muff-${TARGET}"
+          archive_file="${archive_name}.tar.gz"
+
+          mkdir -p "artifacts/${archive_name}"
+          cp "target/${TARGET}/release/muff${exe}" "artifacts/${archive_name}/muff${exe}"
+          tar -C artifacts -czvf "artifacts/${archive_file}" "${archive_name}"
+          rm -rf "artifacts/${archive_name}"
+
+          cd artifacts
+          if command -v sha256sum > /dev/null; then
+            sha256sum "${archive_file}" > "${archive_file}.sha256"
+          else
+            shasum -a 256 "${archive_file}" > "${archive_file}.sha256"
+          fi
+          cat "${archive_file}.sha256"
+      - name: "Upload binary"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: artifacts-${{ matrix.target }}
+          compression-level: 0
+          path: artifacts
+
+  github-release:
+    needs: [plan, sdist, build]
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      # For creating the tag and the GitHub release.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: "Create GitHub release"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Refuse to reuse an existing tag: `gh release create` would otherwise attach the
+          # release to whatever commit that tag already points to.
+          if gh api "repos/${GH_REPO}/git/ref/tags/${VERSION}" > /dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists in ${GH_REPO}. Bump the version before releasing." >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<EOF
+          Muff ${VERSION}, based on [Ruff ${VERSION}](https://github.com/astral-sh/ruff/releases/tag/${VERSION}).
+
+          ## Installation
+
+          From PyPI:
+
+          \`\`\`bash
+          pip install muff==${VERSION}
+          \`\`\`
+
+          Or download the standalone binary for your platform (\`muff-<target>.tar.gz\`) from the assets below.
+          EOF
+
+          gh release create "${VERSION}" \
+            --target "${RELEASE_COMMIT}" \
+            --title "muff ${VERSION}" \
+            --notes-file release-notes.md \
+            artifacts/muff-*.tar.gz \
+            artifacts/muff-*.tar.gz.sha256 \
+            dist/*.whl \
+            dist/*.tar.gz
+
+  pypi-publish:
+    needs: [github-release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/muff/
+    permissions:
+      # For PyPI's trusted publishing.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: "Publish to PyPI"
+        run: uv publish -v dist/*
