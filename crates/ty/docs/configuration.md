@@ -1,6 +1,35 @@
 <!-- WARNING: This file is auto-generated (cargo dev generate-all). Update the doc comments on the 'Options' struct in 'crates/ty_project/src/metadata/options.rs' if you want to change anything here. -->
 
 # Configuration
+## `baseline`
+
+Path to the JSON file that records existing lint diagnostics for this project.
+Relative paths are resolved against the project root. Use `ty check --update-baseline`
+to create or update the file.
+
+Diagnostic baselines are in preview. The file format may change between ty releases.
+
+**Default value**: `null`
+
+**Type**: `str`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty]
+    baseline = "ty-baseline.json"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    baseline = "ty-baseline.json"
+    ```
+
+---
+
 ## `rules`
 
 Configures the enabled rules and their severity.
@@ -16,6 +45,8 @@ Valid severities are:
 
 By default, ty exits with code 1 if it emits any warning or error diagnostics.
 Set `terminal.error-on-warning` to `false` to exit with code 0 if all diagnostics have `warning` severity.
+
+If the same table specifies both a rule's current name and an alias, the current name takes precedence.
 
 **Default value**: `{...}`
 
@@ -45,7 +76,10 @@ Set `terminal.error-on-warning` to `false` to exit with code 0 if all diagnostic
 
 ### `allowed-unresolved-imports`
 
-A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
+A list of module glob patterns for which `import-not-found` and
+`missing-module-member` diagnostics should be suppressed.
+For `from pkg import name`, ty matches against `pkg` if the module cannot be resolved,
+and against `pkg.name` if the module resolves but the name cannot be imported.
 
 Details on supported glob patterns:
 - `*` matches zero or more characters except `.`. For example, `foo.*` matches `foo.bar` but
@@ -160,6 +194,196 @@ Defaults to `true`.
 
 ---
 
+### `return-type-inference`
+
+This setting controls when ty infers return types for functions without an explicit
+return type annotation.
+
+- `"never"`: Do not infer return types from function bodies. Unannotated functions
+  will have an inferred return type of `Unknown`.
+- `"always"`: Infer return types for unannotated functions and methods.
+
+Enabling return type inference will never override explicit return type annotations.
+Lambda functions are not affected by this setting and their return type will always
+be inferred.
+
+Return types for generator functions and asynchronous functions are currently not
+inferred, but we plan to change this soon.
+
+Functions in stubs and `if TYPE_CHECKING` blocks are never considered for return type
+inference.
+
+**Default value**: `"never"`
+
+**Type**: `"never" | "always"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    return-type-inference = "always"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    return-type-inference = "always"
+    ```
+
+---
+
+### `strict-equality-semantics`
+
+Configure ty's behavior regarding type inference and narrowing of equality
+checks. Defaults to `false`.
+
+By default, ty makes various assumptions about equality checks that match the
+intuitions of most Python programmers, but may not be fully sound in all situations.
+Enabling this option makes ty more conservative about these assumptions, making it
+less likely to infer `Literal[True]` or `Literal[False]` as the result of an
+equality check. This has various effects on type checking, including fewer type
+narrowing opportunities and more conservative assumptions regarding control flow.
+
+One way in which ty will by default make unsound assumptions is by narrowing an
+object `x` of type `str` to `Literal["a"]` after an `if x == "a"` check. This is
+unsound because a subclass of `str` with value `"a"` will (by default) compare equal
+to `"a"`, but will not be of type `Literal["a"]`:
+
+```pycon
+>>> # `Literal["a"]` can only be inhabited by instances of exactly `str`, not
+>>> # subclasses, but str subclasses compare equal by default:
+>>> class StringSubclass(str): ...
+...
+>>> StringSubclass("a") == "a"
+True
+>>>
+>>> # This also applies to `StrEnum`s:
+>>> from enum import StrEnum
+>>> class MyEnum(StrEnum):
+...     A = "a"
+...
+>>> MyEnum.A == "a"
+True
+```
+
+Enabling this option prevents the unsound narrowing of `x` to `Literal["a"]`,
+and instead keeps it as `str`:
+
+```python
+from typing import Literal
+
+def parse(value: str) -> Literal["a"] | None:
+    # with `strict-equality-semantics = true`, no narrowing will occur here,
+    # and an error will be emitted on the `return` statement.
+    if value == "a":
+        return value
+    return None
+```
+
+Another assumption ty makes by default is that subclasses will never override `__eq__` or
+`__ne__`. This allows ty to narrow the following union based on an equality check, despite
+the fact that an instance of a subclass of `Foo` could compare equal to `None`, and it's
+perfectly valid to pass an instance of a subclass into the `x` parameter of this function:
+
+```python
+def narrow(x: Foo | None, other: Foo) -> None:
+    if x == other:
+        # with this option enabled, `x` will still have type `Foo | None` here,
+        # since it is legal to subclass `Foo` and override its `__eq__` method.
+        reveal_type(x)
+```
+
+Many operations in Python implicitly call `__eq__` under the hood; enabling this option
+will also impact those operations. For example, this option will also impact narrowing from
+`in` checks, and narrowing in `match` statements that use value patterns:
+
+```python
+def narrow_in(x: Foo | None, other: list[Foo]) -> None:
+    if x in other:
+        # with this option enabled, `x` will still have type `Foo | None` here,
+        # since the `in` operator implicitly calls `__eq__` on each element of `other`.
+        reveal_type(x)
+
+
+def narrow_match(x: str) -> None:
+    match x:
+        case "a":
+            # with this option enabled, `x` will still have type `str` here,
+            # since this `case` branch will be taken by any object that compares
+            # equal to `"a"`, including subclasses of `str`.
+            reveal_type(x)
+```
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Preserve broad builtin types instead of narrowing them to literals
+    strict-equality-semantics = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Preserve broad builtin types instead of narrowing them to literals
+    strict-equality-semantics = true
+    ```
+
+---
+
+### `strict-generic-narrowing`
+
+Whether ty should use strict narrowing for unspecialized generic classes in
+`isinstance()` and `issubclass()` checks, `match` class patterns, and `TypeIs` checks.
+
+When enabled, ty narrows to the top materialization of the class. For example,
+`isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
+representing the (infinite) union of all possible `list` specializations. Iterating
+over the list would yield values of type `object`.
+
+When disabled, ty uses gradual generic narrowing, preserving compatible type
+arguments from the original type where possible. For example,
+`isinstance(value, list)` narrows a value of type `Sequence[int]` to `list[int]`.
+If no specialization is available, the same check narrows a value of type `object`
+to `list[Unknown]`; items of any type can then be appended to the list. Class
+patterns such as `case list():` follow the same behavior.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+---
+
 ## `environment`
 
 ### `extra-paths`
@@ -210,10 +434,15 @@ This can be a path to:
 
 If you're using a project management tool such as uv, you should not generally need to
 specify this option, as commands such as `uv run` will set the `VIRTUAL_ENV` environment
-variable to point to your project's virtual environment. ty can also infer the location of
-your environment from an activated Conda environment, and will look for a `.venv` directory
-in the project root if none of the above apply. Failing that, ty will look for a `python3`
-or `python` binary available in `PATH`.
+variable to point to your project's virtual environment. Otherwise, ty looks for an
+activated child Conda or Pixi environment, a `.venv` directory in the project root, then
+an activated base Conda environment, in that order. ty skips Conda and Pixi environments
+that contain no Python interpreter. If none of these environments are found, ty looks for
+a `python3` or `python` binary in `PATH`.
+
+Scripts with inline metadata use their own Python environment. They can use an explicitly
+configured environment, an activated environment, or an environment selected by the editor.
+Unlike projects, they do not automatically use a `.venv` directory.
 
 [`sys.prefix`]: https://docs.python.org/3/library/sys.html#sys.prefix
 
@@ -297,11 +526,14 @@ to determine a value:
    and attempt to infer the Python version of that environment
 3. Fall back to the default value (see below)
 
+A script uses its inline `environment.python-version` first, then `requires-python`.
+It falls back to the project's version if it has no inline `[tool.ty]` table.
+
 For some language features, ty can also understand conditionals based on comparisons
 with `sys.version_info`. These are commonly found in typeshed, for example,
 to reflect the differing contents of the standard library across Python versions.
 
-**Default value**: `"3.14"`
+**Default value**: `"3.15"`
 
 **Type**: `"3.7" | "3.8" | "3.9" | "3.10" | "3.11" | "3.12" | "3.13" | "3.14" | "3.15"`
 
@@ -336,6 +568,10 @@ if they exist and are not packages (i.e. they do not contain `__init__.py` or `_
 * `./src`
 * `./<project-name>` (if a `./<project-name>/<project-name>` directory exists)
 * `./python`
+
+Scripts with inline metadata have no first-party roots by default because they are
+single-file programs. Set `root = ["."]` in the script's `[tool.ty.environment]` table
+to import sibling modules.
 
 **Default value**: `null`
 
@@ -539,7 +775,10 @@ severity levels or disable them entirely.
 
 #### `allowed-unresolved-imports`
 
-A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
+A list of module glob patterns for which `import-not-found` and
+`missing-module-member` diagnostics should be suppressed.
+For `from pkg import name`, ty matches against `pkg` if the module cannot be resolved,
+and against `pkg.name` if the module resolves but the name cannot be imported.
 
 Details on supported glob patterns:
 - `*` matches zero or more characters except `.`. For example, `foo.*` matches `foo.bar` but
@@ -562,6 +801,9 @@ any module where the first component contains the substring `test`, use `*test*.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Suppress errors for all `test` modules except `test.foo`
     allowed-unresolved-imports = ["test.**", "!test.foo"]
@@ -570,6 +812,9 @@ any module where the first component contains the substring `test`, use `*test*.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Suppress errors for all `test` modules except `test.foo`
     allowed-unresolved-imports = ["test.**", "!test.foo"]
@@ -603,6 +848,9 @@ When multiple patterns match, later entries take precedence.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Replace all pandas and numpy imports with Any
     replace-imports-with-any = ["pandas.**", "numpy.**"]
@@ -611,6 +859,9 @@ When multiple patterns match, later entries take precedence.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Replace all pandas and numpy imports with Any
     replace-imports-with-any = ["pandas.**", "numpy.**"]
@@ -639,6 +890,9 @@ Defaults to `true`.
 === "pyproject.toml"
 
     ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
     [tool.ty.overrides.analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
@@ -647,9 +901,303 @@ Defaults to `true`.
 === "ty.toml"
 
     ```toml
+    [[overrides]]
+    include = ["src"]
+
     [overrides.analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+#### `return-type-inference`
+
+This setting controls when ty infers return types for functions without an explicit
+return type annotation.
+
+- `"never"`: Do not infer return types from function bodies. Unannotated functions
+  will have an inferred return type of `Unknown`.
+- `"always"`: Infer return types for unannotated functions and methods.
+
+Enabling return type inference will never override explicit return type annotations.
+Lambda functions are not affected by this setting and their return type will always
+be inferred.
+
+Return types for generator functions and asynchronous functions are currently not
+inferred, but we plan to change this soon.
+
+Functions in stubs and `if TYPE_CHECKING` blocks are never considered for return type
+inference.
+
+**Default value**: `"never"`
+
+**Type**: `"never" | "always"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    return-type-inference = "always"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    return-type-inference = "always"
+    ```
+
+---
+
+#### `strict-equality-semantics`
+
+Configure ty's behavior regarding type inference and narrowing of equality
+checks. Defaults to `false`.
+
+By default, ty makes various assumptions about equality checks that match the
+intuitions of most Python programmers, but may not be fully sound in all situations.
+Enabling this option makes ty more conservative about these assumptions, making it
+less likely to infer `Literal[True]` or `Literal[False]` as the result of an
+equality check. This has various effects on type checking, including fewer type
+narrowing opportunities and more conservative assumptions regarding control flow.
+
+One way in which ty will by default make unsound assumptions is by narrowing an
+object `x` of type `str` to `Literal["a"]` after an `if x == "a"` check. This is
+unsound because a subclass of `str` with value `"a"` will (by default) compare equal
+to `"a"`, but will not be of type `Literal["a"]`:
+
+```pycon
+>>> # `Literal["a"]` can only be inhabited by instances of exactly `str`, not
+>>> # subclasses, but str subclasses compare equal by default:
+>>> class StringSubclass(str): ...
+...
+>>> StringSubclass("a") == "a"
+True
+>>>
+>>> # This also applies to `StrEnum`s:
+>>> from enum import StrEnum
+>>> class MyEnum(StrEnum):
+...     A = "a"
+...
+>>> MyEnum.A == "a"
+True
+```
+
+Enabling this option prevents the unsound narrowing of `x` to `Literal["a"]`,
+and instead keeps it as `str`:
+
+```python
+from typing import Literal
+
+def parse(value: str) -> Literal["a"] | None:
+    # with `strict-equality-semantics = true`, no narrowing will occur here,
+    # and an error will be emitted on the `return` statement.
+    if value == "a":
+        return value
+    return None
+```
+
+Another assumption ty makes by default is that subclasses will never override `__eq__` or
+`__ne__`. This allows ty to narrow the following union based on an equality check, despite
+the fact that an instance of a subclass of `Foo` could compare equal to `None`, and it's
+perfectly valid to pass an instance of a subclass into the `x` parameter of this function:
+
+```python
+def narrow(x: Foo | None, other: Foo) -> None:
+    if x == other:
+        # with this option enabled, `x` will still have type `Foo | None` here,
+        # since it is legal to subclass `Foo` and override its `__eq__` method.
+        reveal_type(x)
+```
+
+Many operations in Python implicitly call `__eq__` under the hood; enabling this option
+will also impact those operations. For example, this option will also impact narrowing from
+`in` checks, and narrowing in `match` statements that use value patterns:
+
+```python
+def narrow_in(x: Foo | None, other: list[Foo]) -> None:
+    if x in other:
+        # with this option enabled, `x` will still have type `Foo | None` here,
+        # since the `in` operator implicitly calls `__eq__` on each element of `other`.
+        reveal_type(x)
+
+
+def narrow_match(x: str) -> None:
+    match x:
+        case "a":
+            # with this option enabled, `x` will still have type `str` here,
+            # since this `case` branch will be taken by any object that compares
+            # equal to `"a"`, including subclasses of `str`.
+            reveal_type(x)
+```
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    # Preserve broad builtin types instead of narrowing them to literals
+    strict-equality-semantics = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    # Preserve broad builtin types instead of narrowing them to literals
+    strict-equality-semantics = true
+    ```
+
+---
+
+#### `strict-generic-narrowing`
+
+Whether ty should use strict narrowing for unspecialized generic classes in
+`isinstance()` and `issubclass()` checks, `match` class patterns, and `TypeIs` checks.
+
+When enabled, ty narrows to the top materialization of the class. For example,
+`isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
+representing the (infinite) union of all possible `list` specializations. Iterating
+over the list would yield values of type `object`.
+
+When disabled, ty uses gradual generic narrowing, preserving compatible type
+arguments from the original type where possible. For example,
+`isinstance(value, list)` narrows a value of type `Sequence[int]` to `list[int]`.
+If no specialization is available, the same check narrows a value of type `object`
+to `list[Unknown]`; items of any type can then be appended to the list. Class
+patterns such as `case list():` follow the same behavior.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [[tool.ty.overrides]]
+    include = ["src"]
+
+    [tool.ty.overrides.analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [[overrides]]
+    include = ["src"]
+
+    [overrides.analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+---
+
+## `project-manager`
+
+### `project`
+
+The project manager to use for discovering the project's workspace and Python environment.
+
+This setting is in preview and may change between ty releases.
+
+- With `"none"` (the default), ty discovers the project and Python environment itself.
+- With `"uv"`, ty uses [uv](https://docs.astral.sh/uv/) to discover the workspace root,
+  Python environment, and dependency metadata. The environment must already be synchronized;
+  ty does not install project dependencies. uv may update the lockfile. This requires
+  uv 0.12.3 or newer.
+
+An explicit `TY_UV` takes precedence over this setting. If your editor marks the workspace
+as untrusted, ty discovers the project without running uv.
+
+**Default value**: `"none"`
+
+**Type**: `"uv" | "none"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.project-manager]
+    project = "uv"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [project-manager]
+    project = "uv"
+    ```
+
+---
+
+### `script`
+
+The project manager to use for scripts with PEP 723 inline metadata.
+
+This setting is in preview and may change between ty releases.
+
+- With `"none"` (the default), ty looks for imported packages in your Python environment.
+  Install any third-party packages the script needs in that environment.
+- With `"uv"`, each script gets its own Python environment. ty uses
+  [uv](https://docs.astral.sh/uv/) to install the script's declared dependencies there
+  and resolves imports from that environment. This requires uv 0.12.3 or newer.
+
+If a script has an inline `[tool.ty]` table, its `project-manager.script` setting
+takes precedence. Otherwise, the script inherits the project's value.
+
+When checking untrusted code with `ty check`, pass `--config 'project-manager.script="none"'`
+to disable script synchronization. To disable both script synchronization and uv workspace
+discovery, set the `TY_UV` environment variable to `off`. `TY_UV` takes precedence over
+`--config`. If your editor marks the workspace as untrusted, ty disables both automatically.
+
+`uv check` sets `TY_UV=1`, so it always enables script synchronization.
+
+**Default value**: `"none"`
+
+**Type**: `"uv" | "none"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.project-manager]
+    script = "uv"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [project-manager]
+    script = "uv"
     ```
 
 ---
@@ -736,6 +1284,33 @@ to re-include `dist` use `exclude = ["!dist"]`
 
 ---
 
+### `exclude-scripts`
+
+Whether to exclude files containing PEP 723 inline script metadata unless they are
+explicitly passed on the command line.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.src]
+    exclude-scripts = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [src]
+    exclude-scripts = true
+    ```
+
+---
+
 ### `include`
 
 A list of files and directories to check. The `include` option
@@ -815,43 +1390,6 @@ Enabled by default.
 
 ---
 
-### `root`
-
-!!! warning "Deprecated"
-    This option has been deprecated. Use `environment.root` instead.
-
-The root of the project, used for finding first-party modules.
-
-If left unspecified, ty will try to detect common project layouts and initialize `src.root` accordingly.
-The project root (`.`) is always included. Additionally, the following directories are included
-if they exist and are not packages (i.e. they do not contain `__init__.py` or `__init__.pyi` files):
-
-* `./src`
-* `./<project-name>` (if a `./<project-name>/<project-name>` directory exists)
-* `./python`
-
-**Default value**: `null`
-
-**Type**: `str`
-
-**Example usage**:
-
-=== "pyproject.toml"
-
-    ```toml
-    [tool.ty.src]
-    root = "./app"
-    ```
-
-=== "ty.toml"
-
-    ```toml
-    [src]
-    root = "./app"
-    ```
-
----
-
 ## `terminal`
 
 ### `error-on-warning`
@@ -892,7 +1430,7 @@ Defaults to `full`.
 
 **Default value**: `full`
 
-**Type**: `full | concise | github | gitlab | junit`
+**Type**: `full | concise | github | gitlab | junit | sarif`
 
 **Example usage**:
 

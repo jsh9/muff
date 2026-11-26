@@ -3,6 +3,21 @@ use insta_cmd::assert_cmd_snapshot;
 use crate::CliTest;
 
 #[test]
+fn shell_completion_broken_pipe() -> anyhow::Result<()> {
+    let case = CliTest::new()?;
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+
+    let status = case
+        .command_with_subcommand("generate-shell-completion")
+        .arg("fish")
+        .stdout(writer)
+        .status()?;
+    assert!(status.success(), "{status}");
+    Ok(())
+}
+
+#[test]
 fn only_warnings() -> anyhow::Result<()> {
     let case = CliTest::with_file("test.py", r"print(x)  # [unresolved-reference]")?;
 
@@ -15,7 +30,6 @@ fn only_warnings() -> anyhow::Result<()> {
       |
     1 | print(x)  # [unresolved-reference]
       |       ^
-      |
 
     Found 1 diagnostic
 
@@ -85,7 +99,6 @@ fn only_info() -> anyhow::Result<()> {
       |
     3 | reveal_type(1)
       |             ^ `Literal[1]`
-      |
 
     Found 1 diagnostic
 
@@ -114,7 +127,6 @@ fn only_info_and_error_on_warning_is_true() -> anyhow::Result<()> {
       |
     3 | reveal_type(1)
       |             ^ `Literal[1]`
-      |
 
     Found 1 diagnostic
 
@@ -146,7 +158,6 @@ fn only_warnings_and_error_on_warning_overrides_configuration() -> anyhow::Resul
       |
     1 | print(x)  # [unresolved-reference]
       |       ^
-      |
 
     Found 1 diagnostic
 
@@ -178,7 +189,6 @@ fn only_warnings_and_error_on_warning_is_disabled_in_configuration() -> anyhow::
       |
     1 | print(x)  # [unresolved-reference]
       |       ^
-      |
 
     Found 1 diagnostic
 
@@ -207,14 +217,12 @@ fn both_warnings_and_errors() -> anyhow::Result<()> {
       |
     2 | print(x)     # [unresolved-reference]
       |       ^
-      |
 
     error[not-subscriptable]: Cannot subscript object of type `Literal[4]` with no `__getitem__` method
      --> test.py:3:7
       |
     3 | print(4[1])  # [not-subscriptable]
       |       ^^^^
-      |
 
     Found 2 diagnostics
 
@@ -243,14 +251,12 @@ fn both_warnings_and_errors_and_exit_zero_on_warning() -> anyhow::Result<()> {
       |
     2 | print(x)     # [unresolved-reference]
       |       ^
-      |
 
     error[not-subscriptable]: Cannot subscript object of type `Literal[4]` with no `__getitem__` method
      --> test.py:3:7
       |
     3 | print(4[1])  # [not-subscriptable]
       |       ^^^^
-      |
 
     Found 2 diagnostics
 
@@ -279,14 +285,12 @@ fn exit_zero_is_true() -> anyhow::Result<()> {
       |
     2 | print(x)     # [unresolved-reference]
       |       ^
-      |
 
     error[not-subscriptable]: Cannot subscript object of type `Literal[4]` with no `__getitem__` method
      --> test.py:3:7
       |
     3 | print(4[1])  # [not-subscriptable]
       |       ^^^^
-      |
 
     Found 2 diagnostics
 

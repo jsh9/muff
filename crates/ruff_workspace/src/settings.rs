@@ -6,20 +6,23 @@ use ruff_linter::display_settings;
 use ruff_linter::settings::LinterSettings;
 use ruff_linter::settings::types::{
     CompiledPerFileTargetVersionList, ExtensionMapping, FilePattern, FilePatternSet, OutputFormat,
-    UnsafeFixes,
+    PreviewMode, UnsafeFixes,
 };
 use ruff_macros::CacheKey;
 use ruff_python_ast::{PySourceType, PythonVersion};
 use ruff_python_formatter::{
-    DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, NestedStringQuoteStyle, PreviewMode,
-    PyFormatOptions, QuoteStyle,
+    DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, NestedStringQuoteStyle,
+    PreviewMode as FormatterPreviewMode, PyFormatOptions, QuoteStyle,
 };
 use ruff_source_file::find_newline;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, CacheKey)]
 pub struct Settings {
+    /// Top-level preview mode for features shared by the linter and formatter.
+    pub preview: PreviewMode,
     #[cache_key(ignore)]
     pub cache_dir: PathBuf,
     #[cache_key(ignore)]
@@ -31,6 +34,8 @@ pub struct Settings {
     #[cache_key(ignore)]
     pub output_format: OutputFormat,
     #[cache_key(ignore)]
+    pub output_prefer_rule_codes: bool,
+    #[cache_key(ignore)]
     pub show_fixes: bool,
 
     pub file_resolver: FileResolverSettings,
@@ -41,12 +46,19 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        let project_root = path_dedot::CWD.as_path();
+        Self::new(path_dedot::CWD.as_path())
+    }
+}
+
+impl Settings {
+    pub(crate) fn new(project_root: &Path) -> Self {
         Self {
+            preview: PreviewMode::Disabled,
             cache_dir: cache_dir(project_root),
             fix: false,
             fix_only: false,
             output_format: OutputFormat::default(),
+            output_prefer_rule_codes: false,
             show_fixes: false,
             unsafe_fixes: UnsafeFixes::default(),
             linter: LinterSettings::new(project_root),
@@ -67,6 +79,8 @@ impl fmt::Display for Settings {
                 self.fix,
                 self.fix_only,
                 self.output_format,
+                self.output_prefer_rule_codes,
+                self.preview,
                 self.show_fixes,
                 self.unsafe_fixes,
                 self.file_resolver | nested,
@@ -143,6 +157,9 @@ pub(crate) static INCLUDE: &[FilePattern] = &[
     FilePattern::Builtin("*.pyi"),
     FilePattern::Builtin("*.ipynb"),
     FilePattern::Builtin("**/pyproject.toml"),
+    FilePattern::Builtin("**/ruff.toml"),
+    FilePattern::Builtin("**/.ruff.toml"),
+    FilePattern::Builtin("*.md"),
 ];
 pub(crate) static INCLUDE_PREVIEW: &[FilePattern] = &[
     FilePattern::Builtin("*.py"),
@@ -150,6 +167,8 @@ pub(crate) static INCLUDE_PREVIEW: &[FilePattern] = &[
     FilePattern::Builtin("*.pyw"),
     FilePattern::Builtin("*.ipynb"),
     FilePattern::Builtin("**/pyproject.toml"),
+    FilePattern::Builtin("**/ruff.toml"),
+    FilePattern::Builtin("**/.ruff.toml"),
     FilePattern::Builtin("*.md"),
 ];
 
@@ -171,7 +190,7 @@ impl FileResolverSettings {
 pub struct FormatterSettings {
     pub exclude: FilePatternSet,
     pub extension: ExtensionMapping,
-    pub preview: PreviewMode,
+    pub preview: FormatterPreviewMode,
     /// The non-path-resolved Python version specified by the `target-version` input option.
     ///
     /// See [`FormatterSettings::resolve_target_version`] for a way to obtain the Python version for
@@ -267,7 +286,7 @@ impl Default for FormatterSettings {
             extension: ExtensionMapping::default(),
             unresolved_target_version: default_options.target_version(),
             per_file_target_version: CompiledPerFileTargetVersionList::default(),
-            preview: PreviewMode::Disabled,
+            preview: FormatterPreviewMode::Disabled,
             line_width: default_options.line_width(),
             line_ending: LineEnding::Auto,
             indent_style: default_options.indent_style(),

@@ -11,6 +11,7 @@ use ruff_python_ast::{self as ast, Expr, Keyword};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::{AlwaysFixableViolation, Fix, FixAvailability, Violation};
 
 use crate::rules::pyflakes::cformat::CFormatSummary;
@@ -40,15 +41,15 @@ use crate::rules::pyflakes::format::FormatSummary;
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
-pub(crate) struct PercentFormatInvalidFormat {
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
+pub(crate) struct PercentFormatInvalidSyntax {
     pub(crate) message: String,
 }
 
-impl Violation for PercentFormatInvalidFormat {
+impl Violation for PercentFormatInvalidSyntax {
     #[derive_message_formats]
     fn message(&self) -> String {
-        let PercentFormatInvalidFormat { message } = self;
+        let PercentFormatInvalidSyntax { message } = self;
         format!("`%`-format string has invalid format string: {message}")
     }
 }
@@ -80,7 +81,7 @@ impl Violation for PercentFormatInvalidFormat {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatExpectedMapping;
 
 impl Violation for PercentFormatExpectedMapping {
@@ -117,7 +118,7 @@ impl Violation for PercentFormatExpectedMapping {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatExpectedSequence;
 
 impl Violation for PercentFormatExpectedSequence {
@@ -157,23 +158,23 @@ impl Violation for PercentFormatExpectedSequence {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
-pub(crate) struct PercentFormatExtraNamedArguments {
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
+pub(crate) struct PercentFormatUnusedNamedArguments {
     missing: Vec<String>,
 }
 
-impl AlwaysFixableViolation for PercentFormatExtraNamedArguments {
+impl AlwaysFixableViolation for PercentFormatUnusedNamedArguments {
     #[derive_message_formats]
     fn message(&self) -> String {
-        let PercentFormatExtraNamedArguments { missing } = self;
+        let PercentFormatUnusedNamedArguments { missing } = self;
         let message = missing.join(", ");
         format!("`%`-format string has unused named argument(s): {message}")
     }
 
     fn fix_title(&self) -> String {
-        let PercentFormatExtraNamedArguments { missing } = self;
+        let PercentFormatUnusedNamedArguments { missing } = self;
         let message = missing.join(", ");
-        format!("Remove extra named arguments: {message}")
+        format!("Remove unused named arguments: {message}")
     }
 }
 
@@ -198,7 +199,7 @@ impl AlwaysFixableViolation for PercentFormatExtraNamedArguments {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatMissingArgument {
     missing: Vec<String>,
 }
@@ -239,7 +240,7 @@ impl Violation for PercentFormatMissingArgument {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatMixedPositionalAndNamed;
 
 impl Violation for PercentFormatMixedPositionalAndNamed {
@@ -270,7 +271,7 @@ impl Violation for PercentFormatMixedPositionalAndNamed {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatPositionalCountMismatch {
     wanted: usize,
     got: usize,
@@ -309,7 +310,7 @@ impl Violation for PercentFormatPositionalCountMismatch {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatStarRequiresSequence;
 
 impl Violation for PercentFormatStarRequiresSequence {
@@ -340,7 +341,7 @@ impl Violation for PercentFormatStarRequiresSequence {
 /// ## References
 /// - [Python documentation: `printf`-style String Formatting](https://docs.python.org/3/library/stdtypes.html#printf-style-string-formatting)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.142")]
+#[violation_metadata(stable_since = "v0.0.142", category = Category::Correctness)]
 pub(crate) struct PercentFormatUnsupportedFormatCharacter {
     pub(crate) char: char,
 }
@@ -372,15 +373,15 @@ impl Violation for PercentFormatUnsupportedFormatCharacter {
 /// ## References
 /// - [Python documentation: `str.format`](https://docs.python.org/3/library/stdtypes.html#str.format)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.138")]
-pub(crate) struct StringDotFormatInvalidFormat {
+#[violation_metadata(stable_since = "v0.0.138", category = Category::Correctness)]
+pub(crate) struct StrFormatInvalidSyntax {
     pub(crate) message: String,
 }
 
-impl Violation for StringDotFormatInvalidFormat {
+impl Violation for StrFormatInvalidSyntax {
     #[derive_message_formats]
     fn message(&self) -> String {
-        let StringDotFormatInvalidFormat { message } = self;
+        let StrFormatInvalidSyntax { message } = self;
         format!("`.format` call has invalid format string: {message}")
     }
 }
@@ -415,25 +416,25 @@ impl Violation for StringDotFormatInvalidFormat {
 /// ## References
 /// - [Python documentation: `str.format`](https://docs.python.org/3/library/stdtypes.html#str.format)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.139")]
-pub(crate) struct StringDotFormatExtraNamedArguments {
+#[violation_metadata(stable_since = "v0.0.139", category = Category::Correctness)]
+pub(crate) struct StrFormatUnusedKeywordArguments {
     missing: Vec<Name>,
 }
 
-impl Violation for StringDotFormatExtraNamedArguments {
+impl Violation for StrFormatUnusedKeywordArguments {
     const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
 
     #[derive_message_formats]
     fn message(&self) -> String {
-        let StringDotFormatExtraNamedArguments { missing } = self;
+        let StrFormatUnusedKeywordArguments { missing } = self;
         let message = missing.join(", ");
-        format!("`.format` call has unused named argument(s): {message}")
+        format!("`.format` call has unused keyword argument(s): {message}")
     }
 
     fn fix_title(&self) -> Option<String> {
-        let StringDotFormatExtraNamedArguments { missing } = self;
+        let StrFormatUnusedKeywordArguments { missing } = self;
         let message = missing.join(", ");
-        Some(format!("Remove extra named arguments: {message}"))
+        Some(format!("Remove unused keyword arguments: {message}"))
     }
 }
 
@@ -467,26 +468,26 @@ impl Violation for StringDotFormatExtraNamedArguments {
 /// ## References
 /// - [Python documentation: `str.format`](https://docs.python.org/3/library/stdtypes.html#str.format)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.139")]
-pub(crate) struct StringDotFormatExtraPositionalArguments {
+#[violation_metadata(stable_since = "v0.0.139", category = Category::Correctness)]
+pub(crate) struct StrFormatUnusedPositionalArguments {
     missing: Vec<String>,
 }
 
-impl Violation for StringDotFormatExtraPositionalArguments {
+impl Violation for StrFormatUnusedPositionalArguments {
     const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
 
     #[derive_message_formats]
     fn message(&self) -> String {
-        let StringDotFormatExtraPositionalArguments { missing } = self;
+        let StrFormatUnusedPositionalArguments { missing } = self;
         let message = missing.join(", ");
         format!("`.format` call has unused arguments at position(s): {message}")
     }
 
     fn fix_title(&self) -> Option<String> {
-        let StringDotFormatExtraPositionalArguments { missing } = self;
+        let StrFormatUnusedPositionalArguments { missing } = self;
         let message = missing.join(", ");
         Some(format!(
-            "Remove extra positional arguments at position(s): {message}"
+            "Remove unused positional arguments at position(s): {message}"
         ))
     }
 }
@@ -511,15 +512,15 @@ impl Violation for StringDotFormatExtraPositionalArguments {
 /// ## References
 /// - [Python documentation: `str.format`](https://docs.python.org/3/library/stdtypes.html#str.format)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.139")]
-pub(crate) struct StringDotFormatMissingArguments {
+#[violation_metadata(stable_since = "v0.0.139", category = Category::Correctness)]
+pub(crate) struct StrFormatMissingArguments {
     missing: Vec<String>,
 }
 
-impl Violation for StringDotFormatMissingArguments {
+impl Violation for StrFormatMissingArguments {
     #[derive_message_formats]
     fn message(&self) -> String {
-        let StringDotFormatMissingArguments { missing } = self;
+        let StrFormatMissingArguments { missing } = self;
         let message = missing.join(", ");
         format!("`.format` call is missing argument(s) for placeholder(s): {message}")
     }
@@ -550,10 +551,10 @@ impl Violation for StringDotFormatMissingArguments {
 /// ## References
 /// - [Python documentation: `str.format`](https://docs.python.org/3/library/stdtypes.html#str.format)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.139")]
-pub(crate) struct StringDotFormatMixingAutomatic;
+#[violation_metadata(stable_since = "v0.0.139", category = Category::Correctness)]
+pub(crate) struct StrFormatMixedPlaceholderNumbering;
 
-impl Violation for StringDotFormatMixingAutomatic {
+impl Violation for StrFormatMixedPlaceholderNumbering {
     #[derive_message_formats]
     fn message(&self) -> String {
         "`.format` string mixes automatic and manual numbering".to_string()
@@ -606,7 +607,7 @@ pub(crate) fn percent_format_expected_sequence(
 }
 
 /// F504
-pub(crate) fn percent_format_extra_named_arguments(
+pub(crate) fn percent_format_unused_named_arguments(
     checker: &Checker,
     summary: &CFormatSummary,
     right: &Expr,
@@ -647,7 +648,7 @@ pub(crate) fn percent_format_extra_named_arguments(
         .map(|(_, name)| (*name).to_string())
         .collect();
     let mut diagnostic = checker.report_diagnostic(
-        PercentFormatExtraNamedArguments { missing: names },
+        PercentFormatUnusedNamedArguments { missing: names },
         location,
     );
 
@@ -801,7 +802,7 @@ pub(crate) fn percent_format_star_requires_sequence(
 }
 
 /// F522
-pub(crate) fn string_dot_format_extra_named_arguments(
+pub(crate) fn str_format_unused_keyword_arguments(
     checker: &Checker,
     call: &ast::ExprCall,
     summary: &FormatSummary,
@@ -836,7 +837,7 @@ pub(crate) fn string_dot_format_extra_named_arguments(
 
     let names: Vec<Name> = missing.iter().map(|(_, name)| (*name).clone()).collect();
     let mut diagnostic = checker.report_diagnostic(
-        StringDotFormatExtraNamedArguments { missing: names },
+        StrFormatUnusedKeywordArguments { missing: names },
         call.range(),
     );
     let indexes: Vec<usize> = missing.into_iter().map(|(index, _)| index).collect();
@@ -861,7 +862,7 @@ pub(crate) fn string_dot_format_extra_named_arguments(
 }
 
 /// F523
-pub(crate) fn string_dot_format_extra_positional_arguments(
+pub(crate) fn str_format_unused_positional_arguments(
     checker: &Checker,
     call: &ast::ExprCall,
     summary: &FormatSummary,
@@ -910,7 +911,7 @@ pub(crate) fn string_dot_format_extra_positional_arguments(
     }
 
     let mut diagnostic = checker.report_diagnostic(
-        StringDotFormatExtraPositionalArguments {
+        StrFormatUnusedPositionalArguments {
             missing: missing
                 .iter()
                 .map(ToString::to_string)
@@ -941,7 +942,7 @@ pub(crate) fn string_dot_format_extra_positional_arguments(
 }
 
 /// F524
-pub(crate) fn string_dot_format_missing_argument(
+pub(crate) fn str_format_missing_arguments(
     checker: &Checker,
     call: &ast::ExprCall,
     summary: &FormatSummary,
@@ -976,17 +977,17 @@ pub(crate) fn string_dot_format_missing_argument(
         .collect();
 
     if !missing.is_empty() {
-        checker.report_diagnostic(StringDotFormatMissingArguments { missing }, call.range());
+        checker.report_diagnostic(StrFormatMissingArguments { missing }, call.range());
     }
 }
 
 /// F525
-pub(crate) fn string_dot_format_mixing_automatic(
+pub(crate) fn str_format_mixed_placeholder_numbering(
     checker: &Checker,
     call: &ast::ExprCall,
     summary: &FormatSummary,
 ) {
     if !(summary.autos.is_empty() || summary.indices.is_empty()) {
-        checker.report_diagnostic(StringDotFormatMixingAutomatic, call.range());
+        checker.report_diagnostic(StrFormatMixedPlaceholderNumbering, call.range());
     }
 }

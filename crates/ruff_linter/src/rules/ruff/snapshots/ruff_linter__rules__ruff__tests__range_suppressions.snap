@@ -46,7 +46,6 @@ RUF103 [*] Invalid suppression comment: no matching 'disable' comment
 18 |     I = 1
 19 |     # ruff: enable[E741, F841]
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
 help: Remove suppression comment
    |
 18 |     I = 1
@@ -111,7 +110,6 @@ RUF100 [*] Unused suppression (non-enabled: `E501`)
 47 |     I = 1
 48 |     # ruff: enable[E501]
    |     --------------------
-   |
 help: Remove unused suppression
    |
 45 |     # An unused suppression diagnostic should also be logged.
@@ -290,7 +288,7 @@ help: Remove unused suppression
 87 |     print("hello")
    |
 
-RUF102 [*] Invalid rule code in suppression: YF829
+RUF102 [*] Unknown rule in suppression: YF829
   --> suppressions.py:93:21
    |
 91 | def f():
@@ -302,8 +300,6 @@ RUF102 [*] Invalid rule code in suppression: YF829
 96 |     # ruff: enable[F841, RQW320]
 97 |     # ruff: enable[YF829]
    |                    -----
-   |
-help: Add non-Ruff rule codes to the `lint.external` configuration option
 help: Remove the suppression comment
    |
 92 |     # Unknown rule codes
@@ -315,7 +311,7 @@ help: Remove the suppression comment
 96 |
    |
 
-RUF102 [*] Invalid rule code in suppression: RQW320
+RUF102 [*] Unknown rule in suppression: RQW320
   --> suppressions.py:94:27
    |
 92 |     # Unknown rule codes
@@ -327,8 +323,7 @@ RUF102 [*] Invalid rule code in suppression: RQW320
    |                          ------
 97 |     # ruff: enable[YF829]
    |
-help: Add non-Ruff rule codes to the `lint.external` configuration option
-help: Remove the rule code `RQW320`
+help: Remove the rule `RQW320`
    |
 93 |     # ruff: disable[YF829]
    -     # ruff: disable[F841, RQW320]
@@ -381,7 +376,6 @@ F841 [*] Local variable `bar` is assigned to but never used
 117 |     foo = 0
 118 |     bar = 0
     |     ^^^
-    |
 help: Remove assignment to unused variable `bar`
     |
 117 |     foo = 0
@@ -397,7 +391,6 @@ F841 [*] Local variable `bar` is assigned to but never used
 123 |     foo = 0  # ruff: ignore[F841]
 124 |     bar = 0
     |     ^^^
-    |
 help: Remove assignment to unused variable `bar`
     |
 123 |     foo = 0  # ruff: ignore[F841]
@@ -413,7 +406,6 @@ F841 [*] Local variable `bar` is assigned to but never used
 131 |     """  # ruff: ignore[F841]
 132 |     bar = 0
     |     ^^^
-    |
 help: Remove assignment to unused variable `bar`
     |
 131 |     """  # ruff: ignore[F841]
@@ -422,7 +414,7 @@ help: Remove assignment to unused variable `bar`
     |
 note: This is an unsafe fix and may change runtime behavior
 
-ARG001 Unused function argument: `bar`
+ARG001 Unused function parameter: `bar`
    --> suppressions.py:146:5
     |
 144 |     # ruff: ignore[ARG001]  should only cover the first argument
@@ -433,7 +425,7 @@ ARG001 Unused function argument: `bar`
 148 |     print("hello")
     |
 
-ARG001 Unused function argument: `bar`
+ARG001 Unused function parameter: `bar`
    --> suppressions.py:153:5
     |
 151 | def f(
@@ -487,7 +479,6 @@ RUF100 [*] Unused suppression (non-enabled: `F401`)
 176 | print("goodbye")
 177 | # ruff:enable[F401]
     | -------------------
-    |
 help: Remove unused suppression
     |
 174 | # https://github.com/astral-sh/ruff/issues/23235

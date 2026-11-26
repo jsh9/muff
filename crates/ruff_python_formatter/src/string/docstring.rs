@@ -15,7 +15,7 @@ use ruff_python_parser::ParseOptions;
 use ruff_python_trivia::TriviaRanges;
 use {
     ruff_formatter::{FormatOptions, IndentStyle, LineWidth, Printed, write},
-    ruff_python_trivia::{PythonWhitespace, is_python_whitespace},
+    ruff_python_trivia::{PythonWhitespace, is_python_whitespace, tab_offset},
     ruff_text_size::{Ranged, TextLen, TextRange, TextSize},
 };
 
@@ -229,8 +229,8 @@ fn contains_unescaped_newline(haystack: &str) -> bool {
 }
 
 /// An abstraction for printing each line of a docstring.
-struct DocstringLinePrinter<'ast, 'buf, 'fmt, 'src> {
-    f: &'fmt mut PyFormatter<'ast, 'buf>,
+struct DocstringLinePrinter<'ast, 'buf, 'state, 'fmt, 'src> {
+    f: &'fmt mut PyFormatter<'ast, 'buf, 'state>,
 
     /// A queue of actions to perform.
     ///
@@ -263,7 +263,7 @@ struct DocstringLinePrinter<'ast, 'buf, 'fmt, 'src> {
     code_example: CodeExample<'src>,
 }
 
-impl<'src> DocstringLinePrinter<'_, '_, '_, 'src> {
+impl<'src> DocstringLinePrinter<'_, '_, '_, '_, 'src> {
     /// Print all of the lines in the given iterator to this
     /// printer's formatter.
     ///
@@ -1431,10 +1431,7 @@ impl<'src> CodeExampleMarkdown<'src> {
             self.fence_kind.to_char().is_ascii(),
             "fence char should be ASCII",
         );
-        if !rest[fence_len..].chars().all(is_python_whitespace) {
-            return false;
-        }
-        true
+        rest[fence_len..].chars().all(is_python_whitespace)
     }
 
     /// Pushes the given line as part of this code example.
@@ -1693,7 +1690,7 @@ impl Indentation {
         for char in iter {
             if char == '\t' {
                 // Pad to the next multiple of tab_width
-                width += Self::TAB_INDENT_WIDTH - (width.rem_euclid(Self::TAB_INDENT_WIDTH));
+                width += tab_offset(width, Self::TAB_INDENT_WIDTH);
                 len += '\t'.text_len();
             } else if char.is_whitespace() {
                 width += char.len_utf8();
@@ -1720,7 +1717,7 @@ impl Indentation {
             Self::TabSpaces { tabs, spaces } => tabs * Self::TAB_INDENT_WIDTH + spaces,
             Self::SpacesTabs { spaces, tabs } => {
                 let mut indent = spaces;
-                indent += Self::TAB_INDENT_WIDTH - indent.rem_euclid(Self::TAB_INDENT_WIDTH);
+                indent += tab_offset(indent, Self::TAB_INDENT_WIDTH);
                 indent + (tabs - 1) * Self::TAB_INDENT_WIDTH
             }
             Self::Mixed { width, .. } => width,
@@ -1827,8 +1824,7 @@ impl Indentation {
             }
             if char == '\t' {
                 // Pad to the next multiple of tab_width
-                seen_indent_len +=
-                    Self::TAB_INDENT_WIDTH - (seen_indent_len.rem_euclid(Self::TAB_INDENT_WIDTH));
+                seen_indent_len += tab_offset(seen_indent_len, Self::TAB_INDENT_WIDTH);
                 trimmed = &trimmed[1..];
             } else if char.is_whitespace() {
                 seen_indent_len += char.len_utf8();

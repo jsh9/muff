@@ -4,11 +4,13 @@
 
 use std::cmp::Ordering;
 
-use ruff_index::{Idx, IndexVec};
+use ruff_index::Idx;
 use rustc_hash::FxHashMap;
 
+use crate::interned_nodes::{BinaryConstraintCache, ConstraintId, InternedNodes};
+use crate::narrowing_constraints::{NarrowingConstraintsBuilder, ScopedNarrowingConstraint};
 use crate::predicate::ScopedPredicateId;
-use crate::rank::{RankBitBox, RankBitBoxVec};
+use crate::rank::RankBitBox;
 
 /// A ternary formula that defines under what conditions a binding is visible. (A ternary formula
 /// is just like a boolean formula, but with `Ambiguous` as a third potential result. See the
@@ -29,7 +31,7 @@ use crate::rank::{RankBitBox, RankBitBoxVec};
 ///
 /// reachability constraints are normalized, so equivalent constraints are guaranteed to have equal
 /// IDs.
-#[derive(Clone, Copy, Eq, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ScopedReachabilityConstraintId(u32);
 
 impl std::fmt::Debug for ScopedReachabilityConstraintId {
@@ -100,12 +102,21 @@ impl ScopedReachabilityConstraintId {
     pub const ALWAYS_FALSE: ScopedReachabilityConstraintId =
         ScopedReachabilityConstraintId(0xffff_fffd);
 
-    pub fn is_terminal(self) -> bool {
+    pub(crate) fn is_terminal(self) -> bool {
         self.0 >= SMALLEST_TERMINAL.0
     }
 
-    pub fn as_u32(self) -> u32 {
+    fn as_u32(self) -> u32 {
         self.0
+    }
+}
+
+impl ConstraintId for ScopedReachabilityConstraintId {
+    const EMPTY: Self = ALWAYS_TRUE;
+
+    fn cache_key(a: Self, b: Self) -> (Self, Self) {
+        // AMBIGUOUS sorts after every interior node and never has an arena index.
+        if b == AMBIGUOUS { (a, b) } else { (b, a) }
     }
 }
 
@@ -137,7 +148,7 @@ const SMALLEST_TERMINAL: ScopedReachabilityConstraintId = ALWAYS_FALSE;
 const MAX_INTERIOR_NODES: usize = 512 * 1024;
 
 /// A collection of reachability constraints for a given scope.
-#[derive(Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, PartialEq, Eq, get_size2::GetSize)]
 pub struct ReachabilityConstraints {
     /// The interior TDD nodes that were marked as used when being built.
     used_interiors: Box<[InteriorNode]>,
@@ -171,45 +182,25 @@ impl ReachabilityConstraints {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct ReachabilityConstraintsBuilder {
-    interiors: IndexVec<ScopedReachabilityConstraintId, InteriorNode>,
-    interior_used: RankBitBoxVec,
-    interior_cache: FxHashMap<InteriorNode, ScopedReachabilityConstraintId>,
+    interiors: InternedNodes<ScopedReachabilityConstraintId, InteriorNode>,
     not_cache: FxHashMap<ScopedReachabilityConstraintId, ScopedReachabilityConstraintId>,
-    and_cache: FxHashMap<
-        (
-            ScopedReachabilityConstraintId,
-            ScopedReachabilityConstraintId,
-        ),
-        ScopedReachabilityConstraintId,
-    >,
-    or_cache: FxHashMap<
-        (
-            ScopedReachabilityConstraintId,
-            ScopedReachabilityConstraintId,
-        ),
-        ScopedReachabilityConstraintId,
-    >,
+    and_cache: BinaryConstraintCache<ScopedReachabilityConstraintId>,
+    or_cache: BinaryConstraintCache<ScopedReachabilityConstraintId>,
 }
 
 impl ReachabilityConstraintsBuilder {
+    /// Returns whether new constraint combinations may lose precision at the arena limit.
+    pub(crate) fn is_saturated(&self) -> bool {
+        self.interiors.len() >= MAX_INTERIOR_NODES
+    }
+
     pub(crate) fn build(self) -> ReachabilityConstraints {
-        if self.interior_used.first_zero().is_none() {
-            ReachabilityConstraints {
-                used_interiors: self.interiors.raw.into_boxed_slice(),
-                used_indices: None,
-            }
-        } else {
-            let used_interiors = (self.interiors.into_iter())
-                .zip(&self.interior_used)
-                .filter_map(|(interior, used)| used.then_some(interior))
-                .collect();
-            let used_indices = RankBitBox::from_bits(self.interior_used);
-            ReachabilityConstraints {
-                used_interiors,
-                used_indices: Some(used_indices),
-            }
+        let (used_interiors, used_indices) = self.interiors.into_used_nodes();
+        ReachabilityConstraints {
+            used_interiors,
+            used_indices,
         }
     }
 
@@ -217,13 +208,81 @@ impl ReachabilityConstraintsBuilder {
     /// only calculated for intermediate values, and which don't need to be included in the final
     /// built result.
     pub(crate) fn mark_used(&mut self, node: ScopedReachabilityConstraintId) {
-        if !node.is_terminal() && !self.interior_used[node.index()] {
-            self.interior_used.set(node.index(), true);
+        if !node.is_terminal() && self.interiors.mark_used(node) {
             let node = self.interiors[node];
             self.mark_used(node.if_true);
             self.mark_used(node.if_ambiguous);
             self.mark_used(node.if_false);
         }
+    }
+
+    /// Converts a reachability formula into a narrowing gate.
+    ///
+    /// An ambiguous reachability leaf cannot exclude a control-flow path, so its
+    /// narrowing gate is `ALWAYS_TRUE`, preserving any existing narrowing.
+    /// Interior ambiguous branches are omitted because narrowing follows the
+    /// runtime-true or runtime-false path of each predicate.
+    pub(crate) fn narrowing_gate(
+        &self,
+        root: ScopedReachabilityConstraintId,
+        narrowing_constraints: &mut NarrowingConstraintsBuilder,
+    ) -> ScopedNarrowingConstraint {
+        enum Action {
+            Visit(ScopedReachabilityConstraintId),
+            Finish(ScopedReachabilityConstraintId),
+        }
+
+        let terminal = |id| match id {
+            ScopedReachabilityConstraintId::ALWAYS_TRUE
+            | ScopedReachabilityConstraintId::AMBIGUOUS => {
+                Some(ScopedNarrowingConstraint::ALWAYS_TRUE)
+            }
+            ScopedReachabilityConstraintId::ALWAYS_FALSE => {
+                Some(ScopedNarrowingConstraint::ALWAYS_FALSE)
+            }
+            _ => None,
+        };
+
+        if let Some(root) = terminal(root) {
+            return root;
+        }
+
+        let root_node = self.interiors[root];
+        if let (Some(if_true), Some(if_false)) =
+            (terminal(root_node.if_true), terminal(root_node.if_false))
+        {
+            return narrowing_constraints.add_conditional(root_node.atom, if_true, if_false);
+        }
+
+        let mut converted = FxHashMap::default();
+        let mut actions = vec![Action::Visit(root)];
+
+        while let Some(action) = actions.pop() {
+            match action {
+                Action::Visit(id) => {
+                    if terminal(id).is_some() || converted.contains_key(&id) {
+                        continue;
+                    }
+
+                    let node = self.interiors[id];
+                    actions.push(Action::Finish(id));
+                    actions.push(Action::Visit(node.if_false));
+                    actions.push(Action::Visit(node.if_true));
+                }
+                Action::Finish(id) => {
+                    let node = self.interiors[id];
+                    let if_true =
+                        terminal(node.if_true).unwrap_or_else(|| converted[&node.if_true]);
+                    let if_false =
+                        terminal(node.if_false).unwrap_or_else(|| converted[&node.if_false]);
+                    let result =
+                        narrowing_constraints.add_conditional(node.atom, if_true, if_false);
+                    converted.insert(id, result);
+                }
+            }
+        }
+
+        converted[&root]
     }
 
     /// Implements the ordering that determines which level a TDD node appears at.
@@ -276,10 +335,7 @@ impl ReachabilityConstraintsBuilder {
             return node.if_true;
         }
 
-        *self.interior_cache.entry(node).or_insert_with(|| {
-            self.interior_used.push(false);
-            self.interiors.push(node)
-        })
+        self.interiors.intern(node)
     }
 
     /// Adds a new reachability constraint that checks a single [`super::predicate::Predicate`].
@@ -347,6 +403,7 @@ impl ReachabilityConstraintsBuilder {
     }
 
     /// Adds a new reachability constraint that is the ternary OR of two existing ones.
+    #[inline]
     pub(crate) fn add_or_constraint(
         &mut self,
         a: ScopedReachabilityConstraintId,
@@ -355,16 +412,26 @@ impl ReachabilityConstraintsBuilder {
         match (a, b) {
             (ALWAYS_TRUE, _) | (_, ALWAYS_TRUE) => return ALWAYS_TRUE,
             (ALWAYS_FALSE, other) | (other, ALWAYS_FALSE) => return other,
-            (AMBIGUOUS, AMBIGUOUS) => return AMBIGUOUS,
+            _ if a == b => return a,
             _ => {}
         }
 
         // OR is commutative, which lets us halve the cache requirements
         let (a, b) = if b.0 < a.0 { (b, a) } else { (a, b) };
-        if let Some(cached) = self.or_cache.get(&(a, b)) {
-            return *cached;
+        if let Some(cached) = self.or_cache.get(a, b) {
+            return cached;
         }
 
+        self.or_uncached(a, b)
+    }
+
+    /// Compute the disjunction on a cache miss with the operands in ascending ID order.
+    /// The first operand is an interior node and the second can be `AMBIGUOUS`.
+    fn or_uncached(
+        &mut self,
+        a: ScopedReachabilityConstraintId,
+        b: ScopedReachabilityConstraintId,
+    ) -> ScopedReachabilityConstraintId {
         if self.interiors.len() >= MAX_INTERIOR_NODES {
             return AMBIGUOUS;
         }
@@ -412,11 +479,12 @@ impl ReachabilityConstraintsBuilder {
             if_ambiguous,
             if_false,
         });
-        self.or_cache.insert((a, b), result);
+        self.or_cache.insert(a, b, result);
         result
     }
 
     /// Adds a new reachability constraint that is the ternary AND of two existing ones.
+    #[inline]
     pub(crate) fn add_and_constraint(
         &mut self,
         a: ScopedReachabilityConstraintId,
@@ -425,16 +493,26 @@ impl ReachabilityConstraintsBuilder {
         match (a, b) {
             (ALWAYS_FALSE, _) | (_, ALWAYS_FALSE) => return ALWAYS_FALSE,
             (ALWAYS_TRUE, other) | (other, ALWAYS_TRUE) => return other,
-            (AMBIGUOUS, AMBIGUOUS) => return AMBIGUOUS,
+            _ if a == b => return a,
             _ => {}
         }
 
         // AND is commutative, which lets us halve the cache requirements
         let (a, b) = if b.0 < a.0 { (b, a) } else { (a, b) };
-        if let Some(cached) = self.and_cache.get(&(a, b)) {
-            return *cached;
+        if let Some(cached) = self.and_cache.get(a, b) {
+            return cached;
         }
 
+        self.and_uncached(a, b)
+    }
+
+    /// Compute the conjunction on a cache miss with the operands in ascending ID order.
+    /// The first operand is an interior node and the second can be `AMBIGUOUS`.
+    fn and_uncached(
+        &mut self,
+        a: ScopedReachabilityConstraintId,
+        b: ScopedReachabilityConstraintId,
+    ) -> ScopedReachabilityConstraintId {
         if self.interiors.len() >= MAX_INTERIOR_NODES {
             return AMBIGUOUS;
         }
@@ -482,7 +560,7 @@ impl ReachabilityConstraintsBuilder {
             if_ambiguous,
             if_false,
         });
-        self.and_cache.insert((a, b), result);
+        self.and_cache.insert(a, b, result);
         result
     }
 }

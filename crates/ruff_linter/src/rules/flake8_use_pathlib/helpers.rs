@@ -16,8 +16,7 @@ pub(crate) fn is_pathlib_path_call(checker: &Checker, expr: &Expr) -> bool {
     expr.as_call_expr().is_some_and(|expr_call| {
         checker
             .semantic()
-            .resolve_qualified_name(&expr_call.func)
-            .is_some_and(|name| matches!(name.segments(), ["pathlib", "Path"]))
+            .matches_qualified_name(&expr_call.func, &["pathlib", "Path"])
     })
 }
 
@@ -103,7 +102,7 @@ pub(crate) fn check_os_pathlib_single_arg_calls(
     });
 }
 
-pub(crate) fn get_name_expr(expr: &Expr) -> Option<&ast::ExprName> {
+fn get_name_expr(expr: &Expr) -> Option<&ast::ExprName> {
     match expr {
         Expr::Name(name) => Some(name),
         Expr::Call(ExprCall { func, .. }) => get_name_expr(func),

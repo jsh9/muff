@@ -15,6 +15,7 @@ use ruff_python_ast::{
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashMap;
+use ty_python_core::ProgramFile;
 use ty_python_core::definition::DefinitionKind;
 use ty_python_semantic::{ImportAliasResolution, SemanticModel};
 
@@ -29,8 +30,8 @@ use ty_python_semantic::{ImportAliasResolution, SemanticModel};
 /// are reported when the nested callable is expanded separately. Declaration
 /// expressions attached to a nested callable are still included while
 /// traversing the containing item's body.
-pub fn outgoing_calls(db: &dyn Db, file: File, offset: TextSize) -> Vec<OutgoingCall> {
-    let module = parsed_module(db, file).load(db);
+pub fn outgoing_calls(db: &dyn Db, file: ProgramFile<'_>, offset: TextSize) -> Vec<OutgoingCall> {
+    let module = parsed_module(db, file.python_file(db)).load(db);
     let model = SemanticModel::new(db, file);
     let Some(goto_target) = find_goto_target(&model, &module, offset) else {
         return Vec::new();
@@ -51,14 +52,15 @@ pub fn outgoing_calls(db: &dyn Db, file: File, offset: TextSize) -> Vec<Outgoing
         let Some(def) = resolved.definition() else {
             continue;
         };
-        let def_file = def.file(db);
-        let parsed = parsed_module(db, def_file).load(db);
+        // Call-site ranges are relative to the prepared item's file.
+        if def.program_file(db) != file {
+            continue;
+        }
 
-        let model = SemanticModel::new(db, def_file);
         let mut finder = OutgoingCallsFinder {
             db,
             model: &model,
-            tokens: parsed.tokens(),
+            tokens: module.tokens(),
             by_callee: &mut groups,
             ancestors: Vec::new(),
         };
@@ -68,7 +70,7 @@ pub fn outgoing_calls(db: &dyn Db, file: File, offset: TextSize) -> Vec<Outgoing
         // the visitor stops at nested callables — see `OutgoingCallsFinder`.
         match def.kind(db) {
             DefinitionKind::Function(fn_ref) => {
-                let func = fn_ref.node(&parsed);
+                let func = fn_ref.node(&module);
                 finder.walk_callable_signature(
                     &func.decorator_list,
                     func.type_params.as_deref(),
@@ -78,7 +80,7 @@ pub fn outgoing_calls(db: &dyn Db, file: File, offset: TextSize) -> Vec<Outgoing
                 walk_body(&mut finder, &func.body);
             }
             DefinitionKind::Class(class_ref) => {
-                let class = class_ref.node(&parsed);
+                let class = class_ref.node(&module);
                 finder.walk_class_signature(
                     &class.decorator_list,
                     class.type_params.as_deref(),
@@ -152,7 +154,7 @@ impl<'a> OutgoingCallsFinder<'a, '_> {
                 _ => continue,
             }
             let def_file = def.file(self.db);
-            let module_ref = parsed_module(self.db, def_file).load(self.db);
+            let module_ref = parsed_module(self.db, def.python_file(self.db)).load(self.db);
             let selection_range = def.focus_range(self.db, &module_ref).range();
 
             let key = CalleeKey {
@@ -304,7 +306,11 @@ mod tests {
             else {
                 return "No outgoing calls found".to_string();
             };
-            let calls = outgoing_calls(&self.db, target.file, target.selection_range.start());
+            let calls = outgoing_calls(
+                &self.db,
+                self.program_file(target.file),
+                target.selection_range.start(),
+            );
             if calls.is_empty() {
                 return "No outgoing calls found".to_string();
             }
@@ -368,13 +374,11 @@ mod tests {
           |
         6 |     helper()
           |     ^^^^^^ Call site
-          |
         info: Function: `helper` (`main`)
          --> main.py:2:5
           |
         2 | def helper():
           |     ^^^^^^
-          |
         ");
     }
 
@@ -396,13 +400,11 @@ mod tests {
           |
         7 |     c.m()
           |       ^ Call site
-          |
         info: Method: `m` (`main`)
          --> main.py:3:9
           |
         3 |     def m(self):
           |         ^
-          |
         ");
     }
 
@@ -423,13 +425,11 @@ mod tests {
           |
         6 |     C()
           |     ^ Call site
-          |
         info: Class: `C` (`main`)
          --> main.py:2:7
           |
         2 | class C:
           |       ^
-          |
         ");
     }
 
@@ -453,13 +453,11 @@ mod tests {
           |     ^^^^^^ Call site
         7 |     helper()
           |     ^^^^^^ Call site
-          |
         info: Function: `helper` (`main`)
          --> main.py:2:5
           |
         2 | def helper():
           |     ^^^^^^
-          |
         ");
     }
 
@@ -521,65 +519,55 @@ mod tests {
            |
         17 | @cls_deco
            |  ^^^^^^^^ Call site
-           |
         info: Function: `cls_deco` (`main`)
          --> main.py:2:5
           |
         2 | def cls_deco(cls):
           |     ^^^^^^^^
-          |
 
         info[outgoing-calls]: Outgoing calls from `Cls`
           --> main.py:18:11
            |
         18 | class Cls(base_factory()):
            |           ^^^^^^^^^^^^ Call site
-           |
         info: Function: `base_factory` (`main`)
          --> main.py:5:5
           |
         5 | def base_factory():
           |     ^^^^^^^^^^^^
-          |
 
         info[outgoing-calls]: Outgoing calls from `Cls`
           --> main.py:19:12
            |
         19 |     attr = class_body_helper()
            |            ^^^^^^^^^^^^^^^^^ Call site
-           |
         info: Function: `class_body_helper` (`main`)
          --> main.py:8:5
           |
         8 | def class_body_helper():
           |     ^^^^^^^^^^^^^^^^^
-          |
 
         info[outgoing-calls]: Outgoing calls from `Cls`
           --> main.py:21:6
            |
         21 |     @method_deco
            |      ^^^^^^^^^^^ Call site
-           |
         info: Function: `method_deco` (`main`)
           --> main.py:11:5
            |
         11 | def method_deco(fn):
            |     ^^^^^^^^^^^
-           |
 
         info[outgoing-calls]: Outgoing calls from `Cls`
           --> main.py:22:19
            |
         22 |     def m(self, x=default_factory()):
            |                   ^^^^^^^^^^^^^^^ Call site
-           |
         info: Function: `default_factory` (`main`)
           --> main.py:14:5
            |
         14 | def default_factory():
            |     ^^^^^^^^^^^^^^^
-           |
         ");
     }
 
@@ -605,13 +593,11 @@ mod tests {
           |
         8 |     nested()
           |     ^^^^^^ Call site
-          |
         info: Function: `nested` (`main`)
          --> main.py:6:9
           |
         6 |     def nested():
           |         ^^^^^^
-          |
         ");
     }
 
@@ -634,13 +620,11 @@ mod tests {
           |
         5 | def foo(x=default_factory()):
           |           ^^^^^^^^^^^^^^^ Call site
-          |
         info: Function: `default_factory` (`main`)
          --> main.py:2:5
           |
         2 | def default_factory():
           |     ^^^^^^^^^^^^^^^
-          |
         ");
     }
 
@@ -663,13 +647,11 @@ mod tests {
           |
         5 | class Derived(base_factory()):
           |               ^^^^^^^^^^^^ Call site
-          |
         info: Function: `base_factory` (`main`)
          --> main.py:2:5
           |
         2 | def base_factory():
           |     ^^^^^^^^^^^^
-          |
         ");
     }
 
@@ -698,13 +680,11 @@ mod tests {
           |
         9 |     f = lambda x=default_factory(): lambda_body_helper()
           |                  ^^^^^^^^^^^^^^^ Call site
-          |
         info: Function: `default_factory` (`main`)
          --> main.py:2:5
           |
         2 | def default_factory():
           |     ^^^^^^^^^^^^^^^
-          |
         ");
     }
 
@@ -723,26 +703,22 @@ mod tests {
            |
         LL |     print("hi")  # builtins resolve via stubs, so this *does* appear
            |     ^^^^^ Call site
-           |
         info: Function: `print` (`builtins`)
           --> stdlib/builtins.pyi:LL:5
            |
         LL | def print(
            |     ^^^^^
-           |
 
         info[outgoing-calls]: Outgoing calls from `foo`
           --> main.py:LL:5
            |
         LL |     print("hi")  # builtins resolve via stubs, so this *does* appear
            |     ^^^^^ Call site
-           |
         info: Function: `print` (`builtins`)
           --> stdlib/builtins.pyi:LL:5
            |
         LL | def print(
            |     ^^^^^
-           |
         "#);
     }
 
@@ -767,26 +743,60 @@ mod tests {
           |
         8 |         super().m()
           |                 ^ Call site
-          |
         info: Method: `m` (`main`)
          --> main.py:3:9
           |
         3 |     def m(self):
           |         ^
-          |
 
         info[outgoing-calls]: Outgoing calls from `m`
           --> main.py:LL:9
            |
         LL |         super().m()
            |         ^^^^^ Call site
-           |
         info: Class: `super` (`builtins`)
           --> stdlib/builtins.pyi:LL:7
            |
         LL | class super:
            |       ^^^^^
+        ");
+    }
+
+    #[test]
+    fn inherited_property_setter() {
+        let test = CursorTest::builder()
+            .source(
+                "base.py",
+                "
+class Record:
+    @property
+    def name(self):
+        return str(self)
+",
+            )
+            .source(
+                "main.py",
+                "
+from base import Record
+
+class Local(Record):
+    @Record.name.setter
+    def na<CURSOR>me(self, value):
+        self._name = value
+",
+            )
+            .build();
+        assert_snapshot!(test.outgoing_calls(), @"
+        info[outgoing-calls]: Outgoing calls from `name`
+          --> main.py:LL:18
            |
+        LL |     @Record.name.setter
+           |                  ^^^^^^ Call site
+        info: Method: `setter` (`builtins`)
+          --> stdlib/builtins.pyi:LL:9
+           |
+        LL |     def setter(self, fset: Callable[[Any, Any], None], /) -> property:
+           |         ^^^^^^
         ");
     }
 
@@ -817,13 +827,11 @@ def f<CURSOR>oo():
           |
         5 |     helper()
           |     ^^^^^^ Call site
-          |
         info: Function: `helper` (`lib`)
          --> lib.py:2:5
           |
         2 | def helper():
           |     ^^^^^^
-          |
         ");
     }
 }

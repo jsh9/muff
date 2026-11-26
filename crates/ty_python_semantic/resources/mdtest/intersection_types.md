@@ -37,7 +37,8 @@ classes.
 We use `P`, `Q`, `R`, … to denote types that are non-disjoint:
 
 ```py
-from ty_extensions import static_assert, is_disjoint_from
+from ty_extensions import static_assert
+from ty_extensions._internal import is_disjoint_from
 
 class P: ...
 class Q: ...
@@ -58,7 +59,8 @@ We use `Literal[1]`, `Literal[2]`, … as examples of pairwise-disjoint types, a
 supertype of these:
 
 ```py
-from ty_extensions import static_assert, is_disjoint_from, is_subtype_of
+from ty_extensions import static_assert
+from ty_extensions._internal import is_disjoint_from, is_subtype_of
 from typing import Literal
 
 static_assert(is_disjoint_from(Literal[1], Literal[2]))
@@ -75,7 +77,8 @@ static_assert(is_subtype_of(Literal[3], int))
 Finally, we use `A <: B <: C` and `A <: B1`, `A <: B2` to denote hierarchies of (proper) subtypes:
 
 ```py
-from ty_extensions import static_assert, is_subtype_of, is_disjoint_from
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of, is_disjoint_from
 
 class A: ...
 class B(A): ...
@@ -223,6 +226,142 @@ def simplifications_for_same_elements(
     reveal_type(i4)  # revealed: P | Q
 ```
 
+### Union of intersections with disjoint exclusions
+
+When two intersections have the same positive elements and disjoint sets of differing exclusions,
+their union is just the common part. Every value in the common part must satisfy at least one of the
+two sets of exclusions. This also preserves shared exclusions and gradual types:
+
+```py
+from typing import Any, Literal
+from ty_extensions._internal import Unknown
+
+def disjoint(
+    literals: (Any & ~Literal[1]) | (Any & ~Literal[2]),
+    shared: (Unknown & ~str & ~Literal[1]) | (Unknown & ~Literal[2] & ~str),
+    earlier: int | (~str & ~Literal[1]) | (~str & ~Literal[2]),
+):
+    reveal_type(literals)  # revealed: Any
+    reveal_type(shared)  # revealed: Unknown & ~str
+    reveal_type(earlier)  # revealed: ~str
+```
+
+Each side can exclude several values, and the two sets need not have the same size. Only shared
+exclusions remain after merging:
+
+```py
+def groups(
+    disjoint: (Unknown & ~str & ~Literal[10, 11]) | (Unknown & ~Literal[20, 21] & ~str),
+    unequal: (Any & ~Literal[10]) | (Any & ~Literal[20, 21]),
+    shared: (Unknown & ~str & ~Literal[10, 11]) | (Unknown & ~str & ~Literal[11, 12, 13]),
+):
+    reveal_type(disjoint)  # revealed: Unknown & ~str
+    reveal_type(unequal)  # revealed: Any
+    reveal_type(shared)  # revealed: Unknown & ~str & ~Literal[11]
+```
+
+If the exclusions might overlap, a value in both excluded types is still absent from the union, so
+we keep the exclusions:
+
+```py
+class P: ...
+class Q: ...
+
+def overlapping(value: (Any & ~str & ~Literal[10] & ~P) | (Any & ~str & ~Literal[20] & ~Q)):
+    reveal_type(value)  # revealed: (Any & ~str & ~Literal[10] & ~P) | (Any & ~str & ~Literal[20] & ~Q)
+```
+
+### Union elements cover exclusions
+
+Adding an excluded type back to a union makes the exclusion redundant: `(P & ~Q) | Q = P | Q`. This
+also applies when the added type is a supertype of the exclusion.
+
+```pyi
+from ty_extensions import static_assert
+from ty_extensions._internal import is_equivalent_to
+
+class P: ...
+class Q: ...
+class SubQ(Q): ...
+class R: ...
+
+static_assert(is_equivalent_to((P & ~Q) | Q, P | Q))
+static_assert(is_equivalent_to(Q | (P & ~Q), Q | P))
+static_assert(is_equivalent_to((P & ~SubQ) | Q, P | Q))
+static_assert(is_equivalent_to(Q | (P & ~SubQ), Q | P))
+```
+
+Other exclusions remain in place. Removing an exclusion can also make an earlier union element
+redundant, regardless of the order of the elements:
+
+```pyi
+static_assert(is_equivalent_to((P & ~Q & ~R) | Q, (P & ~R) | Q))
+static_assert(is_equivalent_to(Q | (P & ~Q & ~R), Q | (P & ~R)))
+static_assert(is_equivalent_to((P & R) | (P & ~Q) | Q, P | Q))
+static_assert(is_equivalent_to((P & R) | Q | (P & ~Q), P | Q))
+
+def unrelated(value: (P & ~Q) | R):
+    reveal_type(value)  # revealed: (P & ~Q) | R
+```
+
+The covering type must contain every materialization of the exclusion. Repeating a gradual type does
+not guarantee this, but a fully static supertype can cover a gradual exclusion:
+
+```pyi
+from typing import Any
+
+def gradual(value: (P & ~tuple[Any]) | tuple[Any]):
+    reveal_type(value)  # revealed: (P & ~tuple[Any]) | tuple[Any]
+
+static_assert(is_equivalent_to((P & ~tuple[Any]) | tuple[object], P | tuple[object]))
+static_assert(is_equivalent_to((Any & ~Q) | Q, Any | Q))
+```
+
+`Hashable` does not cover every subclass of a non-final class: a subclass can disable hashing.
+
+```pyi
+from collections.abc import Hashable
+
+class Unhashable(P):
+    __hash__: None = None
+
+def hashable_last(value: (Any & ~P) | Hashable):
+    reveal_type(value)  # revealed: (Any & ~P) | Hashable
+
+def hashable_first(value: Hashable | (Any & ~P)):
+    reveal_type(value)  # revealed: Hashable | (Any & ~P)
+
+hashable_last(Unhashable())  # error: [invalid-argument-type]
+hashable_first(Unhashable())  # error: [invalid-argument-type]
+```
+
+The same simplification applies to literal union members, including unions that restore only some of
+the excluded literals:
+
+```pyi
+from enum import Enum
+from typing import Literal
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+def literals(
+    ints: (Any & ~Literal[1]) | Literal[1],
+    reverse_ints: Literal[1] | (Any & ~Literal[1]),
+    strings: (Any & ~Literal["a"]) | Literal["a"],
+    bytes_: (Any & ~Literal[b"a"]) | Literal[b"a"],
+    enums: (Any & ~Literal[Color.RED]) | Literal[Color.RED],
+    partial: (Any & ~Literal[1, 2, 3]) | Literal[1, 2],
+):
+    reveal_type(ints)  # revealed: Any | Literal[1]
+    reveal_type(reverse_ints)  # revealed: Literal[1] | Any
+    reveal_type(strings)  # revealed: Any | Literal["a"]
+    reveal_type(bytes_)  # revealed: Any | Literal[b"a"]
+    reveal_type(enums)  # revealed: Any | Literal[Color.RED]
+    reveal_type(partial)  # revealed: (Any & ~Literal[3]) | Literal[1, 2]
+```
+
 ### Negation distributes over union
 
 Distribution also applies to a negation operation. This is a manifestation of one of
@@ -284,7 +423,8 @@ in intersections, and can be eagerly simplified out. `object & P` is equivalent 
 `object & ~P` is equivalent to `~P` for any type `P`.
 
 ```pyi
-from ty_extensions import is_equivalent_to, static_assert
+from ty_extensions import static_assert
+from ty_extensions._internal import is_equivalent_to
 
 class P: ...
 
@@ -443,6 +583,27 @@ def example_type_bool_type_str(
     i: type[bool] & type[str],
 ) -> None:
     reveal_type(i)  # revealed: Never
+```
+
+Ordinary types accept values with any `NewType` tag, so an integer-based `NewType` can overlap
+`bool`. Distinct `NewType` tags are mutually exclusive even when their runtime values overlap;
+nested `NewType`s retain their relationship with their parent.
+
+```py
+from typing import NewType
+
+UserId = NewType("UserId", int)
+OtherUserId = NewType("OtherUserId", int)
+NestedUserId = NewType("NestedUserId", UserId)
+
+def newtype_intersections(
+    user_bool: UserId & bool,
+    user_nested: UserId & NestedUserId,
+    user_other: UserId & OtherUserId,
+) -> None:
+    reveal_type(user_bool)  # revealed: UserId & bool
+    reveal_type(user_nested)  # revealed: NestedUserId
+    reveal_type(user_other)  # revealed: Never
 ```
 
 #### Positive and negative contributions
@@ -723,7 +884,8 @@ simplified, due to the fact that a `LiteralString` inhabitant is known to have `
 exactly `str` (and not a subclass of `str`):
 
 ```py
-from ty_extensions import AlwaysTruthy, AlwaysFalsy, Unknown
+from ty_extensions import AlwaysTruthy, AlwaysFalsy
+from ty_extensions._internal import Unknown
 from typing_extensions import LiteralString
 
 def f(
@@ -816,13 +978,60 @@ def _(e: (Single | int) & ~Single) -> None:
     reveal_type(e)  # revealed: int
 ```
 
+A `NewType` is preserved when all but one member of its underlying enum are excluded. The resulting
+intersection is also assignable to the remaining member.
+
+```pyi
+from typing import NewType
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to, is_equivalent_to
+
+ColorId = NewType("ColorId", Color)
+NestedColorId = NewType("NestedColorId", ColorId)
+type NestedAlias = NestedColorId
+
+def enum_newtype(value: ColorId & ~(Red | Green), nested: NestedAlias & ~Red & ~Green) -> None:
+    reveal_type(value)  # revealed: ColorId & Literal[Color.BLUE]
+    reveal_type(nested)  # revealed: NestedColorId & Literal[Color.BLUE]
+
+static_assert(is_assignable_to(ColorId & ~(Red | Green), ColorId))
+static_assert(is_assignable_to(ColorId & ~(Red | Green), Blue))
+static_assert(is_equivalent_to(ColorId & ~(Red | Green), ColorId & Blue))
+```
+
+Aliases name the same enum member, while `Flag` members are not exhaustive.
+
+```pyi
+from enum import Flag
+
+class Aliased(Enum):
+    FIRST = 1
+    FIRST_ALIAS = 1
+    LAST = 2
+
+AliasedId = NewType("AliasedId", Aliased)
+
+def aliased_member(value: AliasedId & ~Literal[Aliased.FIRST_ALIAS]) -> None:
+    reveal_type(value)  # revealed: AliasedId & Literal[Aliased.LAST]
+
+class Permission(Flag):
+    READ = 1
+    WRITE = 2
+
+PermissionId = NewType("PermissionId", Permission)
+
+def non_exhaustive(value: PermissionId & ~Literal[Permission.READ]) -> None:
+    reveal_type(value)  # revealed: PermissionId & ~Literal[Permission.READ]
+```
+
 ## Addition of a type to an intersection with many non-disjoint types
 
 This slightly strange-looking test is a regression test for a mistake that was nearly made in a PR:
 <https://github.com/astral-sh/ruff/pull/15475#discussion_r1915041987>.
 
 ```py
-from ty_extensions import AlwaysFalsy, Unknown
+from ty_extensions import AlwaysFalsy
+from ty_extensions._internal import Unknown
 from typing_extensions import Literal
 
 def _(x: str & Unknown & AlwaysFalsy & Literal[""]):
@@ -838,7 +1047,7 @@ is still an unknown set of runtime values, so `~Any` is equivalent to `Any`. We 
 simplify `~Any` to `Any` in intersections. The same applies to `Unknown`.
 
 ```py
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 from typing_extensions import Any, Never
 
 class P: ...
@@ -851,6 +1060,11 @@ def any(
     reveal_type(i1)  # revealed: Any
     reveal_type(i2)  # revealed: P & Any
     reveal_type(i3)  # revealed: Never
+
+type AnyAlias = Any
+
+def aliased_any(value: ~AnyAlias) -> None:
+    reveal_type(value)  # revealed: Any
 
 def unknown(
     i1: ~Unknown,
@@ -868,7 +1082,7 @@ The intersection of an unknown set of runtime values with (another) unknown set 
 still an unknown set of runtime values:
 
 ```py
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 from typing_extensions import Any
 
 class P: ...
@@ -903,7 +1117,7 @@ of another unknown set of values is not necessarily empty, so we keep the positi
 
 ```py
 from typing import Any
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 
 def any(
     i1: Any & ~Any,
@@ -926,7 +1140,7 @@ Gradually-equivalent types can be simplified out of intersections:
 
 ```py
 from typing import Any
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 
 def mixed(
     i1: Any & Unknown,
@@ -1001,11 +1215,50 @@ def _(
     x(1.0)
 ```
 
+### Constructor intersection diagnostics retain the called class types
+
+When an intersection of class objects rejects a constructor call, the diagnostic should describe the
+original class types instead of reconstructing an intersection from their `__init__` and `__new__`
+methods.
+
+```py
+from typing import Self
+
+class UsesInit:
+    def __init__(self, value: int) -> None: ...
+
+class UsesNew:
+    def __new__(cls, value: str) -> Self:
+        return object.__new__(cls)
+
+def _(cls: type[UsesInit]) -> None:
+    if issubclass(cls, UsesNew):
+        reveal_type(cls)  # revealed: type[UsesInit] & type[UsesNew]
+        # error: [invalid-argument-type] "UsesNew.__new__"
+        # snapshot: invalid-argument-type
+        cls(None)
+```
+
+```snapshot
+error[invalid-argument-type]: Argument to `UsesInit.__init__` is incorrect
+  --> src/mdtest_snippet.py:15:13
+   |
+15 |         cls(None)
+   |             ^^^^ Expected `int`, found `None`
+info: Method defined here
+ --> src/mdtest_snippet.py:4:9
+  |
+4 |     def __init__(self, value: int) -> None: ...
+  |         ^^^^^^^^       ---------- Parameter declared here
+info: Intersection element `bound method UsesInit.__init__(value: int) -> None` is incompatible with this call site
+info: Attempted to call intersection type `type[UsesInit] & type[UsesNew]`
+```
+
 ### Error priority: binding error over top-callable
 
 When intersection elements fail with different error types, we use a priority hierarchy to determine
 which errors to show. More specific errors (like `invalid-argument-type`) take precedence over less
-specific ones (like `call-top-callable` or `call-non-callable`).
+specific ones (like `call-to-function-with-unknown-signature` or `not-callable`).
 
 A specific argument error takes priority over a top-callable error:
 
@@ -1017,7 +1270,7 @@ def _(
     x: Callable[[int], str] & Top[Callable[..., object]],
 ) -> None:
     # `Callable[[int], str]` fails with invalid-argument-type (expects int, got str)
-    # `Top[Callable[..., object]]` would fail with call-top-callable
+    # `Top[Callable[..., object]]` would fail with call-to-function-with-unknown-signature
     # We only show the more specific invalid-argument-type error
     # error: [invalid-argument-type]
     x("hello")
@@ -1036,7 +1289,7 @@ def _(
     x: Callable[[int], str] & NotCallable,
 ) -> None:
     # `Callable[[int], str]` fails with invalid-argument-type (expects int, got str)
-    # `NotCallable` would fail with call-non-callable
+    # `NotCallable` would fail with not-callable
     # We only show the more specific invalid-argument-type error
     # error: [invalid-argument-type]
     x("hello")
@@ -1055,10 +1308,10 @@ class NotCallable: ...
 def _(
     x: Top[Callable[..., object]] & NotCallable,
 ) -> None:
-    # `Top[Callable[..., object]]` fails with call-top-callable
-    # `NotCallable` would fail with call-non-callable
-    # We only show the call-top-callable error (it's more specific)
-    # error: [call-top-callable]
+    # `Top[Callable[..., object]]` fails with call-to-function-with-unknown-signature
+    # `NotCallable` would fail with not-callable
+    # We only show the call-to-function-with-unknown-signature error (it's more specific)
+    # error: [call-to-function-with-unknown-signature]
     reveal_type(x())  # revealed: object
 ```
 
@@ -1173,7 +1426,7 @@ class A: ...
 class B: ...
 
 def _(x: A & B) -> None:
-    # error: [call-non-callable] "Object of type `A & B` is not callable"
+    # error: [not-callable] "Object of type `A & B` is not callable"
     reveal_type(x())  # revealed: Unknown
 ```
 
@@ -1199,7 +1452,7 @@ def _(
 
     # When called with a string argument:
     # - The intersection element: Callable[[int], A] fails (wrong type),
-    #   Top[...] would fail with call-top-callable. Due to priority hierarchy,
+    #   Top[...] would fail with call-to-function-with-unknown-signature. Due to priority hierarchy,
     #   only the invalid-argument-type error is shown for the intersection.
     # - The Callable[[str], int] element succeeds.
     # The return type includes both elements' return types:
@@ -1251,7 +1504,7 @@ def _(
 
     # When called with no arguments:
     # - The intersection element: Callable[[int], A] fails (missing argument),
-    #   Top[...] would fail with call-top-callable. Due to priority hierarchy,
+    #   Top[...] would fail with call-to-function-with-unknown-signature. Due to priority hierarchy,
     #   only the missing-argument error is shown.
     # - The Callable[[str], int] also fails (missing argument).
     # error: [missing-argument]
@@ -1287,6 +1540,153 @@ class C:
 
 def f(c: C):
     reveal_type(c.x)  # revealed: ~AlwaysFalsy
+```
+
+## Meta-types of intersections
+
+### Positive class constraints
+
+The class of an intersection must satisfy the class constraints supplied by every positive element.
+Instantiating the resulting class intersection recovers the corresponding instance intersection.
+
+```py
+class Left: ...
+class Right: ...
+
+def positive(value: Left & Right) -> None:
+    reveal_type(value.__class__)  # revealed: type[Left] & type[Right]
+    reveal_type(type(value))  # revealed: type[Left] & type[Right]
+    reveal_type(type(value)())  # revealed: Left & Right
+```
+
+### Bounded type variables
+
+Projecting an intersection into its class type preserves a bounded type variable instead of
+replacing it with its upper bound. An unrelated positive class constraint is preserved too.
+
+```py
+class Bound: ...
+class Other: ...
+
+def preserve[T: Bound](value: T & Other) -> None:
+    reveal_type(type(value))  # revealed: type[T@preserve] & type[Other]
+    reveal_type(type(value)())  # revealed: T@preserve & Other
+```
+
+### Excluded alternatives in type-variable bounds
+
+Excluding an alternative from a type variable's union bound can reveal a definite class. Preserve
+both that class constraint and the original type variable in the resulting class type.
+
+```py
+class Bound:
+    label = "bound"
+
+def exclude_none[T: Bound | None](value: T) -> None:
+    if value is not None:
+        reveal_type(type(value))  # revealed: type[T@exclude_none] & type[Bound]
+        reveal_type(type(value).label)  # revealed: str
+```
+
+### Excluded alternatives in class-object bounds
+
+If the remaining bound is a class object, its class is its metaclass. Preserve that metaclass
+constraint alongside the original type variable.
+
+```py
+class Meta(type): ...
+class Bound(metaclass=Meta): ...
+
+def accepts_meta(value: type[Meta]) -> None: ...
+def exclude_none[T: type[Bound] | None](value: T) -> None:
+    if value is not None:
+        reveal_type(type(value))  # revealed: type[T@exclude_none] & type[Meta]
+        accepts_meta(type(value))
+```
+
+For a final class, the metaclass is known exactly. This also holds for a specialized generic class.
+
+```py
+from typing import final
+
+@final
+class FinalBound(metaclass=Meta): ...
+
+@final
+class FinalGenericBound[U](metaclass=Meta): ...
+
+def exclude_none_final[T: type[FinalBound] | None](value: T) -> None:
+    if value is not None:
+        reveal_type(type(value))  # revealed: type[T@exclude_none_final] & <class 'Meta'>
+        accepts_meta(type(value))
+
+def exclude_none_generic[T: type[FinalGenericBound[int]] | None](value: T) -> None:
+    if value is not None:
+        reveal_type(type(value))  # revealed: type[T@exclude_none_generic] & <class 'Meta'>
+        accepts_meta(type(value))
+```
+
+### Truthiness refinements
+
+Whether an individual object is truthy or falsy does not constrain its runtime class. Both positive
+and negative truthiness refinements must therefore disappear from its meta-type.
+
+```py
+from ty_extensions import AlwaysFalsy
+
+class Base: ...
+
+def truthiness(falsy: Base & AlwaysFalsy, not_falsy: Base & ~AlwaysFalsy) -> None:
+    reveal_type(type(falsy))  # revealed: type[Base]
+    reveal_type(type(not_falsy))  # revealed: type[Base]
+```
+
+### Truthiness-narrowed `Self`
+
+Truthiness describes an individual instance, not its class. Narrowing `Self` by truthiness must
+therefore preserve `type[Self]` while discarding the value-only refinement.
+
+```py
+from typing import Self
+
+class Base:
+    def __bool__(self) -> bool:
+        return True
+
+    def clone(self: Self) -> Self:
+        if not self:
+            return self
+
+        reveal_type(self)  # revealed: Self@clone & ~AlwaysFalsy
+        reveal_type(type(self))  # revealed: type[Self@clone]
+        return type(self)()
+```
+
+### Negative value constraints
+
+Excluding particular instance values does not exclude their classes: a nonzero integer can still
+have class `int`.
+
+```py
+from typing import Literal
+
+def nonzero(value: int & ~Literal[0]) -> None:
+    reveal_type(type(value))  # revealed: type[int]
+```
+
+### Intersections without a positive class constraint
+
+A pure negation supplies no positive class bound, and a truthiness constraint describes only an
+instance value. Both conservatively project to the unconstrained class type.
+
+```py
+from ty_extensions import AlwaysTruthy
+
+class Excluded: ...
+
+def unconstrained(negative: ~Excluded, truthy: AlwaysTruthy & ~Excluded) -> None:
+    reveal_type(type(negative))  # revealed: type
+    reveal_type(type(truthy))  # revealed: type
 ```
 
 ## Methods on intersections
@@ -1345,7 +1745,7 @@ For any gradual type `G`, `Invariant[G] & Invariant[Any] = Invariant[G]`.
 
 ```py
 from typing import Any
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 
 class P: ...
 class Q: ...

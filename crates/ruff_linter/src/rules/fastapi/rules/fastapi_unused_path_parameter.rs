@@ -12,6 +12,7 @@ use ruff_text_size::{Ranged, TextSize};
 
 use crate::Fix;
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::fix::edits::add_parameter;
 use crate::rules::fastapi::rules::is_fastapi_route_decorator;
 use crate::{FixAvailability, Violation};
@@ -64,7 +65,7 @@ use crate::{FixAvailability, Violation};
 /// This rule's fix is marked as unsafe, as modifying a function signature can
 /// change the behavior of the code.
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.10.0")]
+#[violation_metadata(stable_since = "0.10.0", category = Category::Suspicious)]
 pub(crate) struct FastApiUnusedPathParameter {
     arg_name: String,
     function_name: String,
@@ -255,6 +256,8 @@ impl<'a> Dependency<'a> {
     ///     #                 ^^^^^^^^^^^^
     ///     a: str = Depends(foo),
     ///     #        ^^^^^^^^^^^^
+    ///     a: foo = Depends(),
+    ///     #  ^^^   ^^^^^^^^^
     /// ): ...
     /// ```
     fn from_parameter(
@@ -263,7 +266,7 @@ impl<'a> Dependency<'a> {
     ) -> Option<Self> {
         if let Some(dependency) = parameter
             .default()
-            .and_then(|default| Self::from_default(default, semantic))
+            .and_then(|default| Self::from_default(default, parameter.annotation(), semantic))
         {
             return Some(dependency);
         }
@@ -300,10 +303,21 @@ impl<'a> Dependency<'a> {
         }
     }
 
-    fn from_default(expr: &'a Expr, semantic: &SemanticModel<'a>) -> Option<Self> {
+    fn from_default(
+        expr: &'a Expr,
+        annotation: Option<&'a Expr>,
+        semantic: &SemanticModel<'a>,
+    ) -> Option<Self> {
         let arguments = depends_arguments(expr, semantic)?;
 
-        Self::from_depends_call(arguments, semantic)
+        if !arguments.is_empty() {
+            return Self::from_depends_call(arguments, semantic);
+        }
+
+        // Arguments to `Depends` can be empty if the dependency class is inferred
+        // from the parameter type annotation.
+        // https://fastapi.tiangolo.com/tutorial/dependencies/classes-as-dependencies/#shortcut
+        Self::from_dependency_name(annotation?.as_name_expr()?, semantic)
     }
 
     fn from_depends_call(arguments: &'a Arguments, semantic: &SemanticModel<'a>) -> Option<Self> {
@@ -399,19 +413,17 @@ impl<'a> Dependency<'a> {
                         .map(|name| name.id.as_str())
                 })
                 .collect()
-        } else if let Some(method_def) = class_def
-            .body
-            .iter()
-            .filter_map(|stmt| stmt.as_function_def_stmt())
-            .find(|func_def| func_def.name.as_str() == method_name)
-        {
+        } else {
+            let method_def = class_def
+                .body
+                .iter()
+                .filter_map(|stmt| stmt.as_function_def_stmt())
+                .find(|func_def| func_def.name.as_str() == method_name)?;
             // Skip `self` parameter
             non_posonly_non_variadic_parameters(method_def)
                 .skip(1)
                 .map(|param| param.name().as_str())
                 .collect()
-        } else {
-            return None;
         };
 
         Some(Self::Class(parameter_names))
@@ -434,17 +446,11 @@ fn depends_arguments<'a>(expr: &'a Expr, semantic: &SemanticModel) -> Option<&'a
 }
 
 fn is_fastapi_depends(expr: &Expr, semantic: &SemanticModel) -> bool {
-    semantic
-        .resolve_qualified_name(expr)
-        .is_some_and(|qualified_name| matches!(qualified_name.segments(), ["fastapi", "Depends"]))
+    semantic.matches_qualified_name(expr, &["fastapi", "Depends"])
 }
 
 fn is_pydantic_base_model(expr: &Expr, semantic: &SemanticModel) -> bool {
-    semantic
-        .resolve_qualified_name(expr)
-        .is_some_and(|qualified_name| {
-            matches!(qualified_name.segments(), ["pydantic", "BaseModel"])
-        })
+    semantic.matches_qualified_name(expr, &["pydantic", "BaseModel"])
 }
 
 /// Extract the expected in-route name for a given parameter, if it has an alias.
@@ -483,10 +489,7 @@ fn parameter_alias<'a>(parameter: &'a Parameter, semantic: &SemanticModel) -> Op
     }
 
     // Verify that the call was a `fastapi.Path`.
-    if !semantic
-        .resolve_qualified_name(&path.func)
-        .is_some_and(|qualified_name| matches!(qualified_name.segments(), ["fastapi", "Path"]))
-    {
+    if !semantic.matches_qualified_name(&path.func, &["fastapi", "Path"]) {
         return None;
     }
 

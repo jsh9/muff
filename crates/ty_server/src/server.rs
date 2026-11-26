@@ -5,7 +5,7 @@ use crate::PositionEncoding;
 use crate::capabilities::{ResolvedClientCapabilities, server_capabilities};
 use crate::session::{ClientName, InitializationOptions, Session, warn_about_unknown_options};
 use anyhow::Context;
-use lsp_server::Connection;
+use lsp_server::{Connection, ErrorCode, Message, Response};
 use lsp_types::{
     ClientCapabilities, InitializeParams, MessageType, Uri, WorkspaceFolders,
     WorkspaceFoldersInitializeParams,
@@ -19,14 +19,26 @@ mod api;
 mod lazy_work_done_progress;
 mod main_loop;
 mod schedule;
+mod script_progress;
 
 use crate::session::client::Client;
 pub(crate) use api::Error;
-pub(crate) use api::publish_settings_diagnostics;
+pub(crate) use api::{
+    publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
+};
+pub(crate) use lazy_work_done_progress::LazyWorkDoneProgress;
 pub(crate) use main_loop::{
     Action, ConnectionSender, Event, MainLoopReceiver, MainLoopSender, SendRequest,
 };
+pub(crate) use script_progress::ScriptProgress;
 pub(crate) type Result<T> = std::result::Result<T, api::Error>;
+
+/// Maximum number of requests waiting for a worker.
+///
+/// The exact number is arbitrary. A high limit leaves room for bursts of editor
+/// requests. When the queue fills, the server rejects new background requests
+/// to apply back pressure.
+pub(crate) const MAX_QUEUED_REQUESTS: usize = 2048;
 
 pub struct Server {
     connection: Connection,
@@ -56,7 +68,17 @@ impl Server {
             .context("Failed to deserialize initialization parameters")?;
 
         let (initialization_options, deserialization_error) =
-            InitializationOptions::from_value(initialization_options);
+            match InitializationOptions::from_value(initialization_options) {
+                Ok(options) => options,
+                Err(error) => {
+                    connection.sender.send(Message::Response(Response::new_err(
+                        id,
+                        ErrorCode::InvalidParams as i32,
+                        format!("Invalid initialization options: {error:#}"),
+                    )))?;
+                    return Err(error).context("Failed to deserialize initialization options");
+                }
+            };
 
         if !in_test {
             crate::logging::init_logging(
@@ -94,9 +116,9 @@ impl Server {
             }),
         )?;
 
-        // The number 32 was chosen arbitrarily. The main goal was to have enough capacity to queue
-        // some responses before blocking.
-        let (main_loop_sender, main_loop_receiver) = crossbeam::channel::bounded(32);
+        // An edit can wait for database snapshots held by queued jobs. Workers must be
+        // able to return their results while the main loop waits for those snapshots.
+        let (main_loop_sender, main_loop_receiver) = crossbeam::channel::unbounded();
         let client = Client::new(main_loop_sender.clone(), connection.sender.clone());
 
         let unknown_options = &initialization_options.options.unknown;

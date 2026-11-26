@@ -5,6 +5,7 @@ use ruff_text_size::Ranged;
 
 use crate::Violation;
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 
 /// ## What it does
 /// Checks for `break`, `continue`, and `return` statements in `finally`
@@ -41,7 +42,7 @@ use crate::checkers::ast::Checker;
 /// ## References
 /// - [Python documentation: The `try` statement](https://docs.python.org/3/reference/compound_stmts.html#the-try-statement)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.116")]
+#[violation_metadata(stable_since = "v0.0.116", category = Category::Suspicious)]
 pub(crate) struct JumpStatementInFinally {
     name: String,
 }
@@ -71,12 +72,40 @@ fn walk_stmt(checker: &Checker, body: &[Stmt], f: fn(&Stmt) -> bool) {
             );
         }
         match stmt {
-            Stmt::While(ast::StmtWhile { body, .. }) | Stmt::For(ast::StmtFor { body, .. }) => {
+            Stmt::While(ast::StmtWhile { body, orelse, .. })
+            | Stmt::For(ast::StmtFor { body, orelse, .. }) => {
                 walk_stmt(checker, body, Stmt::is_return_stmt);
+                walk_stmt(checker, orelse, f);
             }
-            Stmt::If(ast::StmtIf { body, .. })
-            | Stmt::Try(ast::StmtTry { body, .. })
-            | Stmt::With(ast::StmtWith { body, .. }) => {
+            Stmt::If(ast::StmtIf {
+                body,
+                elif_else_clauses,
+                ..
+            }) => {
+                walk_stmt(checker, body, f);
+
+                for clause in elif_else_clauses {
+                    walk_stmt(checker, &clause.body, f);
+                }
+            }
+
+            Stmt::Try(ast::StmtTry {
+                body,
+                handlers,
+                orelse,
+                ..
+            }) => {
+                walk_stmt(checker, body, f);
+
+                for handler in handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    walk_stmt(checker, &handler.body, f);
+                }
+
+                walk_stmt(checker, orelse, f);
+            }
+
+            Stmt::With(ast::StmtWith { body, .. }) => {
                 walk_stmt(checker, body, f);
             }
             Stmt::Match(ast::StmtMatch { cases, .. }) => {

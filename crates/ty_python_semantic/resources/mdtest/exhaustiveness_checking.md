@@ -117,14 +117,14 @@ def direct_bool_tuple(pair: tuple[bool, bool]) -> int:
         case (_, False):
             return 2
 
-def non_exhaustive_bool_tuple(pair: tuple[bool, bool]) -> int:  # error: [invalid-return-type]
+def non_exhaustive_bool_tuple(pair: tuple[bool, bool]) -> int:  # error: [invalid-implicit-return]
     match pair:
         case (True, True):
             return 0
         case (False, _):
             return 1
 
-def guarded_bool_tuple(pair: tuple[bool, bool], flag: bool) -> int:  # error: [invalid-return-type]
+def guarded_bool_tuple(pair: tuple[bool, bool], flag: bool) -> int:  # error: [invalid-implicit-return]
     match pair:
         case (True, True) if flag:
             return 0
@@ -132,12 +132,16 @@ def guarded_bool_tuple(pair: tuple[bool, bool], flag: bool) -> int:  # error: [i
             return 1
         case (_, False):
             return 2
+```
 
-# Expanding this tuple would produce 128 alternatives, exceeding the limit of 64. The checker
-# falls back to its conservative behavior instead of performing an exponential expansion.
-def tuple_exceeding_expansion_limit(
+Although this tuple has 128 possible value combinations, the patterns only constrain the first two
+positions. Tuple-pattern fallthrough only expands positions that can fail, so it can prove the match
+exhaustive without enumerating the remaining elements.
+
+```py
+def tuple_expands_only_constrained_positions(
     value: tuple[bool, bool, bool, bool, bool, bool, bool],
-) -> int:  # error: [invalid-return-type]
+) -> int:
     match value:
         case (True, True, _, _, _, _, _):
             return 0
@@ -145,6 +149,38 @@ def tuple_exceeding_expansion_limit(
             return 1
         case (_, False, _, _, _, _, _):
             return 2
+```
+
+Tuple length alone does not prevent exhaustive sequence-pattern checking. The patterns below
+constrain only the first element, and together they cover every possible value of the tuple.
+
+```py
+# fmt: off
+LongBoolTuple = tuple[
+    bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+    bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+    bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+    bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+    bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+    bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+    bool, bool, bool, bool, bool,
+]
+
+def long_tuple_with_one_constrained_position(value: LongBoolTuple) -> int:
+    match value:
+        case (
+            True, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+            _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+            _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+        ):
+            return 0
+        case (
+            False, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+            _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+            _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
+        ):
+            return 1
+# fmt: on
 ```
 
 ## Checks on enum literals
@@ -247,7 +283,11 @@ def match_non_exhaustive(x: Color):
             assert_never(x)  # error: [type-assertion-failure]
 ```
 
-Matching every named member is not exhaustive for enums that can also have unnamed members.
+Matching every named member is not exhaustive for `Flag` classes.
+
+Custom `_missing_` methods technically could create a new undeclared member via `object.__new__`,
+but this is also possible outside a `_missing_` method. We choose to in general ignore this
+possibility; we don't assume that a `_missing_` method will do this.
 
 ```py
 from enum import Enum, Flag
@@ -260,17 +300,47 @@ class MissingValueEnum(Enum):
 
     @classmethod
     def _missing_(cls, value: object) -> "MissingValueEnum":
-        return object.__new__(cls)
+        return cls.ONLY
 
-def match_flag(value: Permission) -> int:  # error: [invalid-return-type]
+def match_flag(value: Permission) -> int:  # error: [invalid-implicit-return]
     match value:
         case Permission.READ:
             return 1
 
-def match_open_enum(value: MissingValueEnum) -> int:  # error: [invalid-return-type]
+def match_custom_missing_enum(value: MissingValueEnum) -> int:
     match value:
         case MissingValueEnum.ONLY:
             return 1
+```
+
+## Checks on enums with custom missing methods
+
+An enum remains exhaustive when it overrides `_missing_`, even if its value comes from a function
+with the enum as its return type.
+
+```py
+from enum import Enum
+from typing import assert_never
+
+class FallbackColor(Enum):
+    RED = 1
+    BLUE = 2
+
+    @classmethod
+    def _missing_(cls, value: object) -> "FallbackColor":
+        return FallbackColor.RED
+
+def get_color() -> FallbackColor:
+    return FallbackColor.BLUE
+
+color = get_color()
+match color:
+    case FallbackColor.RED:
+        pass
+    case FallbackColor.BLUE:
+        pass
+    case _:
+        assert_never(color)
 ```
 
 ## Checks on enum literal subsets
@@ -423,7 +493,7 @@ def match_non_exhaustive(x: A | B | C):
             # this diagnostic is correct: the inferred type of `x` is `B & ~A & ~C`
             assert_never(x)  # error: [type-assertion-failure]
 
-# Note: no invalid-return-type diagnostic; the `match` is exhaustive
+# The exhaustive `match` ensures that every path returns a value.
 def match_exhaustive_generic[T](obj: GenericClass[T]) -> GenericClass[T]:
     match obj:
         case GenericClass(x=42):
@@ -538,6 +608,48 @@ def no_invalid_return_diagnostic_here_either[T](x: A[T]) -> ASub[T]:
         return x
 ```
 
+## Class patterns with variadic generics
+
+A class pattern matches every specialization of its variadic generic class, including a symbolic
+type variable tuple.
+
+```py
+from typing import Generic, TypeVarTuple, assert_never
+
+Ts = TypeVarTuple("Ts")
+
+class Variadic(Generic[*Ts]): ...
+
+def symbolic(value: Variadic[*Ts]) -> None:
+    match value:
+        case Variadic():
+            reveal_type(value)  # revealed: Variadic[*tuple[*Ts@symbolic]]
+        case _:
+            assert_never(value)
+```
+
+The same pattern is exhaustive when the type variable tuple has an empty specialization.
+
+```py
+def empty(value: Variadic[()]) -> None:
+    match value:
+        case Variadic():
+            reveal_type(value)  # revealed: Variadic[()]
+        case _:
+            assert_never(value)
+```
+
+A nonempty specialization must also remain reachable and exhaustive.
+
+```py
+def nonempty(value: Variadic[int]) -> None:
+    match value:
+        case Variadic():
+            reveal_type(value)  # revealed: Variadic[int]
+        case _:
+            assert_never(value)
+```
+
 ## More `match` pattern types
 
 ### `as` patterns
@@ -584,6 +696,61 @@ class Answer(Enum):
                 return True
             case Answer.NO:
                 return False
+```
+
+Two OR patterns can cover every member of an enum when matching on `self`. Repeating a member across
+cases still leaves an implicit return if another member is missing. Matching an alias also excludes
+the member under its original name.
+
+```py
+from enum import StrEnum
+
+class Status(StrEnum):
+    NEW = "new"
+    PENDING = "pending"
+    QUEUED = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+    def is_terminal(self) -> bool:
+        match self:
+            case Status.NEW | Status.PENDING:
+                return False
+            case Status.SUCCEEDED | Status.FAILED:
+                return True
+
+    def incomplete(self) -> bool:  # error: [invalid-implicit-return]
+        match self:
+            case Status.NEW | Status.QUEUED:
+                return False
+            case Status.NEW | Status.SUCCEEDED:
+                return True
+
+        # revealed: Self@incomplete & ~Literal[Status.NEW] & ~Literal[Status.PENDING] & ~Literal[Status.SUCCEEDED]
+        reveal_type(self)
+```
+
+## Enum value patterns with custom equality
+
+Listing every member can leave an implicit return when the enum's `__eq__` rejects a match.
+
+```py
+from enum import Enum
+from typing import Literal
+
+class Unmatchable(Enum):
+    A = 1
+    B = 2
+
+    def __eq__(self, other: object) -> Literal[False]:
+        return False
+
+    def matches(self) -> bool:  # error: [invalid-implicit-return]
+        match self:
+            case Unmatchable.A | Unmatchable.B:
+                return True
+
+        reveal_type(self)  # revealed: Self@matches
 ```
 
 ## Exhaustiveness checking for type variables with bounds or constraints
@@ -668,8 +835,8 @@ def eq_narrow_if_constrained[T: (Literal["foo"], Literal["bar"])](x: T) -> T:
     return x
 ```
 
-In these examples, no `invalid-return-type` diagnostics are emitted, despite the fact there are no
-`else` clauses. Note that these examples deliberately also do *not* have any `assert_never` or
+In these examples, no `invalid-implicit-return` diagnostics are emitted, despite the fact there are
+no `else` clauses. Note that these examples deliberately also do *not* have any `assert_never` or
 `assert_type` calls, since these call expressions can create their own `IsNonTerminalCall`
 predicates in our reachability infrastructure!
 
@@ -766,14 +933,14 @@ def g(x: ComplexN) -> bool:
 # from the fact that `assert_never` creates its own
 # reachability constraint:
 
-# no `invalid-return-type` diagnostic
+# no `invalid-implicit-return` diagnostic
 def h(x: FloatN) -> bool:
     if isinstance(x, int):
         return True
     elif isinstance(x, float):
         return False
 
-# no `invalid-return-type` diagnostic
+# no `invalid-implicit-return` diagnostic
 def i(x: ComplexN) -> bool:
     if isinstance(x, int):
         return True
@@ -781,4 +948,42 @@ def i(x: ComplexN) -> bool:
         return True
     elif isinstance(x, complex):
         return False
+```
+
+## `isinstance` checks with `Callable`
+
+```toml
+[environment]
+python-version = "3.12"
+
+[rules]
+possibly-unresolved-reference = "error"
+```
+
+The final `Callable` check is exhaustive. These examples deliberately omit an `else` branch and any
+terminal-call assertions so that reachability is determined by the `isinstance` checks alone.
+
+```py
+from collections.abc import Callable
+from typing import Callable as TypingCallable
+
+def assigned(x: Callable[[int], int] | dict[str, int]) -> int:
+    if isinstance(x, dict):
+        result = 1
+    elif isinstance(x, Callable):
+        result = 2
+    return result
+
+def returns(x: Callable[[int], int] | dict[str, int]) -> int:
+    if isinstance(x, dict):
+        return 1
+    elif isinstance(x, TypingCallable):
+        return 2
+
+def match_exhaustive(x: Callable[[int], int] | dict[str, int]) -> int:
+    match x:
+        case dict():
+            return 1
+        case Callable():
+            return 2
 ```

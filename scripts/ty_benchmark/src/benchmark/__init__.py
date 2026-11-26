@@ -1,15 +1,63 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping, NamedTuple
+from typing import NamedTuple
 
 if sys.platform == "win32":
     import mslex as shlex
 else:
     import shlex
+
+
+logger = logging.getLogger(__name__)
+
+
+def benchmark_environment(
+    cwd: Path, *, single_threaded: bool = False
+) -> dict[str, str]:
+    """Keep machine-specific user configuration out of benchmark settings."""
+    config_directory = cwd / ".benchmark-user-config"
+    config_directory.mkdir(exist_ok=True)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("TY_", "PYREFLY_", "PYRIGHT_", "MYPY_", "ZUBAN_"))
+        and key
+        not in (
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "MYPYPATH",
+            "RAYON_NUM_THREADS",
+            "RUST_LOG",
+            "NODE_OPTIONS",
+        )
+    }
+    workers = "1" if single_threaded else str(os.process_cpu_count() or 1)
+    return env | {
+        "XDG_CONFIG_HOME": str(config_directory),
+        "APPDATA": str(config_directory),
+        "TY_MAX_PARALLELISM": workers,
+        "RAYON_NUM_THREADS": workers,
+    }
+
+
+def cli_benchmark_environment(
+    cwd: Path, *, single_threaded: bool = False
+) -> dict[str, str]:
+    """Use checker concurrency defaults independently of the LSP pool limits."""
+    env = benchmark_environment(cwd, single_threaded=single_threaded)
+    # Rayon still accepts its deprecated override; Python can also override CPU discovery.
+    for key in ("RAYON_RS_NUM_CPUS", "PYTHON_CPU_COUNT"):
+        env.pop(key, None)
+    if not single_threaded:
+        env.pop("TY_MAX_PARALLELISM", None)
+        env.pop("RAYON_NUM_THREADS", None)
+    return env
 
 
 class Command(NamedTuple):
@@ -76,6 +124,6 @@ class Hyperfine(NamedTuple):
         for command in self.commands:
             args.append(shlex.join(command.command))
 
-        logging.info(f"Running {args}")
+        logger.info(f"Running {args}")
 
-        subprocess.run(args, cwd=cwd, env=env)
+        subprocess.run(args, cwd=cwd, env=env, check=True)

@@ -23,10 +23,9 @@ use get_size2::GetSize;
 ///
 /// This trick adds O(1.5) bits of overhead per large vector element on 64-bit platforms, and O(2)
 /// bits of overhead on 32-bit platforms.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, GetSize, salsa::Update)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, GetSize)]
 pub struct RankBitBox {
     #[get_size(size_fn = bit_box_size)]
-    #[update(fallback)]
     bits: RankBitBoxStorage,
     chunk_ranks: Box<[u32]>,
 }
@@ -40,11 +39,11 @@ fn bit_box_size(bits: &RankBitBoxStorage) -> usize {
 
 // bitvec does not support `u64` as a Store type on 32-bit platforms
 #[cfg(target_pointer_width = "64")]
-type Chunk = u64;
+pub(crate) type Chunk = u64;
 #[cfg(not(target_pointer_width = "64"))]
-type Chunk = u32;
+pub(crate) type Chunk = u32;
 
-const CHUNK_SIZE: usize = Chunk::BITS as usize;
+pub(crate) const CHUNK_SIZE: usize = Chunk::BITS as usize;
 
 impl RankBitBox {
     pub fn bits_with_capacity(cap: usize) -> RankBitBoxVec {

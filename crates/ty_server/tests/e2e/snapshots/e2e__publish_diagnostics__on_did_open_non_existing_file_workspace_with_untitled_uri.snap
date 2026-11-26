@@ -5,12 +5,12 @@ expression: diagnostics
 PublishDiagnosticsParams {
     uri: Url {
         scheme: "untitled",
-        cannot_be_a_base: false,
+        cannot_be_a_base: true,
         username: "",
         password: None,
         host: None,
         port: None,
-        path: "<temp_dir>/src/foo.py",
+        path: "foo.py",
         query: None,
         fragment: None,
     },
@@ -34,7 +34,7 @@ PublishDiagnosticsParams {
             ),
             code: Some(
                 String(
-                    "invalid-return-type",
+                    "invalid-explicit-return",
                 ),
             ),
             code_description: Some(
@@ -53,7 +53,7 @@ PublishDiagnosticsParams {
                         path: "/rules",
                         query: None,
                         fragment: Some(
-                            "invalid-return-type",
+                            "invalid-explicit-return",
                         ),
                     },
                 },

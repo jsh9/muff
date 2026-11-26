@@ -3,23 +3,21 @@ use crate::diagnostic::{
     stylesheet::{DiagnosticStylesheet, fmt_styled, fmt_with_hyperlink},
 };
 
-use super::FileResolver;
+use super::{FileResolver, Renderer};
 
-pub(super) struct ConciseRenderer<'a> {
+pub struct ConciseRenderer<'a> {
     resolver: &'a dyn FileResolver,
     config: &'a DisplayDiagnosticConfig,
 }
 
 impl<'a> ConciseRenderer<'a> {
-    pub(super) fn new(resolver: &'a dyn FileResolver, config: &'a DisplayDiagnosticConfig) -> Self {
+    pub fn new(resolver: &'a dyn FileResolver, config: &'a DisplayDiagnosticConfig) -> Self {
         Self { resolver, config }
     }
+}
 
-    pub(super) fn render(
-        &self,
-        f: &mut std::fmt::Formatter,
-        diagnostics: &[Diagnostic],
-    ) -> std::fmt::Result {
+impl Renderer for ConciseRenderer<'_> {
+    fn render(&self, f: &mut std::fmt::Formatter, diagnostics: &[Diagnostic]) -> std::fmt::Result {
         let stylesheet = if self.config.color {
             DiagnosticStylesheet::styled().hyperlinks(self.config.hyperlinks)
         } else {
@@ -67,10 +65,9 @@ impl<'a> ConciseRenderer<'a> {
                 write!(f, "{sep} ")?;
             }
 
+            let use_name = self.config.preview && !self.config.prefer_rule_codes;
             if self.config.hide_severity {
-                if !self.config.preview
-                    && let Some(code) = diag.secondary_code()
-                {
+                if !use_name && let Some(code) = diag.secondary_code() {
                     write!(
                         f,
                         "{code} ",
@@ -95,12 +92,13 @@ impl<'a> ConciseRenderer<'a> {
                 }
             } else {
                 let (severity, severity_style) = match diag.severity() {
+                    Severity::Hint => ("hint", stylesheet.info),
                     Severity::Info => ("info", stylesheet.info),
                     Severity::Warning => ("warning", stylesheet.warning),
                     Severity::Error => ("error", stylesheet.error),
                     Severity::Fatal => ("fatal", stylesheet.error),
                 };
-                let id = if self.config.preview {
+                let id = if use_name {
                     diag.id().as_str()
                 } else {
                     diag.secondary_code_or_id()
@@ -117,7 +115,7 @@ impl<'a> ConciseRenderer<'a> {
             }
             if self.config.show_fix_status {
                 // Do not display an indicator for inapplicable fixes
-                if diag.has_applicable_fix(self.config.fix_applicability()) {
+                if diag.has_applicable_fix(self.config.fix_applicability) {
                     write!(f, "[{fix}] ", fix = fmt_styled("*", stylesheet.separator))?;
                 }
             }
@@ -133,12 +131,9 @@ impl<'a> ConciseRenderer<'a> {
 mod tests {
     use ruff_diagnostics::Applicability;
 
-    use crate::diagnostic::{
-        DiagnosticFormat,
-        render::tests::{
-            TestEnvironment, create_diagnostics, create_notebook_diagnostics,
-            create_syntax_error_diagnostics,
-        },
+    use crate::diagnostic::render::tests::{
+        DiagnosticFormat, TestEnvironment, create_diagnostics, create_notebook_diagnostics,
+        create_syntax_error_diagnostics,
     };
 
     #[test]

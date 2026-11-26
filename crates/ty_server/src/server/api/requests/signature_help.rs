@@ -11,8 +11,8 @@ use lsp_types::{
     Documentation, ParameterInformation, ParameterInformationLabel, SignatureHelp,
     SignatureHelpParams, SignatureInformation, Uri,
 };
-use ty_ide::signature_help;
-use ty_project::ProjectDatabase;
+use ty_ide::{MarkupKind, signature_help};
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 pub(crate) struct SignatureHelpRequestHandler;
 
@@ -38,14 +38,14 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
             return Ok(None);
         }
 
-        let Some(file) = snapshot.to_notebook_or_file(db) else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(None);
         };
 
         let Some(offset) = params.text_document_position_params.position.to_text_size(
             db,
             file,
-            snapshot.uri(),
+            snapshot.document().uri(),
             snapshot.encoding(),
         ) else {
             return Ok(None);
@@ -54,7 +54,7 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
         // Extract signature help capabilities from the client
         let resolved_capabilities = snapshot.resolved_client_capabilities();
 
-        let Some(signature_help_info) = signature_help(db, file, offset) else {
+        let Some(signature_help_info) = signature_help(db, db.program_file(file), offset) else {
             return Ok(None);
         };
 
@@ -71,42 +71,35 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
             .signatures
             .into_iter()
             .map(|sig| {
+                let offset_encoding = resolved_capabilities
+                    .supports_signature_label_offset()
+                    .then(|| {
+                        let encoding = snapshot.encoding();
+                        // ASCII byte offsets count code units in all three encodings.
+                        if encoding == PositionEncoding::UTF8 || sig.label.is_ascii() {
+                            PositionEncoding::UTF8
+                        } else {
+                            encoding
+                        }
+                    });
                 let parameters = sig
                     .parameters
                     .into_iter()
                     .map(|param| {
-                        let label = if resolved_capabilities.supports_signature_label_offset() {
-                            // Find the parameter's offset in the signature label
-                            if let Some(start) = sig.label.find(&param.label) {
-                                let encoding = snapshot.encoding();
-
-                                // Convert byte offsets to character offsets based on negotiated encoding
-                                let start_char_offset = match encoding {
-                                    PositionEncoding::UTF8 => start,
-                                    PositionEncoding::UTF16 => {
-                                        sig.label[..start].encode_utf16().count()
-                                    }
-                                    PositionEncoding::UTF32 => sig.label[..start].chars().count(),
-                                };
-
-                                let end_char_offset = match encoding {
-                                    PositionEncoding::UTF8 => start + param.label.len(),
-                                    PositionEncoding::UTF16 => sig.label
-                                        [..start + param.label.len()]
-                                        .encode_utf16()
-                                        .count(),
-                                    PositionEncoding::UTF32 => {
-                                        sig.label[..start + param.label.len()].chars().count()
-                                    }
-                                };
-
-                                let start_u32 =
-                                    u32::try_from(start_char_offset).unwrap_or(u32::MAX);
-                                let end_u32 = u32::try_from(end_char_offset).unwrap_or(u32::MAX);
-                                ParameterInformationLabel::Tuple((start_u32, end_u32))
-                            } else {
-                                ParameterInformationLabel::String(param.label)
-                            }
+                        let label = if let Some(encoding) = offset_encoding
+                            && let Some(start) = sig.label.find(&param.label)
+                        {
+                            let len = |text: &str| match encoding {
+                                PositionEncoding::UTF8 => text.len(),
+                                PositionEncoding::UTF16 => text.encode_utf16().count(),
+                                PositionEncoding::UTF32 => text.chars().count(),
+                            };
+                            let start = len(&sig.label[..start]);
+                            let end = start + len(&param.label);
+                            ParameterInformationLabel::Tuple((
+                                u32::try_from(start).unwrap_or(u32::MAX),
+                                u32::try_from(end).unwrap_or(u32::MAX),
+                            ))
                         } else {
                             ParameterInformationLabel::String(param.label)
                         };
@@ -129,9 +122,9 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
 
                 SignatureInformation {
                     label: sig.label,
-                    documentation: sig
-                        .documentation
-                        .map(|docstring| Documentation::String(docstring.render_plaintext())),
+                    documentation: sig.documentation.map(|docstring| {
+                        Documentation::String(docstring.render(MarkupKind::PlainText))
+                    }),
                     parameters: Some(parameters),
                     active_parameter,
                 }

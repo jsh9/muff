@@ -17,6 +17,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         collection_expr: Option<ast::ExprRef<'_>>,
         call_expression_tcx: TypeContext<'db>,
     ) -> Option<Type<'db>> {
+        let db = self.db();
         if !arguments.args.is_empty() {
             return None;
         }
@@ -24,9 +25,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // Fast-path dict(...) in TypedDict context: infer keyword values against fields,
         // then validate and return the TypedDict type. This also covers `dict(**src)` when `src`
         // is `TypedDict`-shaped.
-        if let Some(tcx) = call_expression_tcx.annotation
+        if let Some(tcx) = call_expression_tcx.expected_type()
             && let Some(typed_dict) = tcx
-                .filter_union(self.db(), Type::is_typed_dict)
+                .filter_union(db, self.program_environment(), Type::is_typed_dict)
                 .as_typed_dict()
         {
             // Only speculate the `**kwargs` applicability check. Assignability handles inputs that
@@ -41,24 +42,25 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // back.
             let supports_typed_dict_context = {
                 let mut speculative_builder = self.speculate_without_diagnostics();
+                let env = speculative_builder.program_environment();
                 infer_unpacked_keyword_types(arguments, |expr, tcx| {
                     speculative_builder.infer_expression(expr, tcx)
                 })
                 .into_iter()
                 .flatten()
                 .all(|keyword_ty| {
-                    keyword_ty
-                        .is_assignable_to(speculative_builder.db(), Type::TypedDict(typed_dict))
-                        || extract_unpacked_typed_dict_keys_from_value_type(
-                            speculative_builder.db(),
-                            keyword_ty,
-                        )
-                        .is_some()
+                    keyword_ty.is_assignable_to(db, env, Type::TypedDict(typed_dict))
+                        || extract_unpacked_typed_dict_keys_from_value_type(db, env, keyword_ty)
+                            .is_some()
                 })
             };
 
             if supports_typed_dict_context {
-                self.infer_typed_dict_constructor_keyword_values(typed_dict, arguments);
+                self.infer_typed_dict_constructor_keyword_values(
+                    typed_dict,
+                    arguments,
+                    call_expression_tcx,
+                );
                 validate_typed_dict_constructor(
                     &self.context,
                     typed_dict,
@@ -102,7 +104,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 let key = keyword_names
                     .get(&elt.node_index().load())
                     .expect("keyword-only dict() fast-path requires named keywords");
-                Type::string_literal(builder.db(), key.as_str())
+                Type::string_literal(builder.db(), key)
             } else {
                 builder.infer_expression(elt, tcx)
             }
@@ -115,5 +117,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             &mut infer_elt_ty,
             call_expression_tcx,
         )
+        .or_else(|| {
+            // Empty calls still need constructor validation and have no inferred values to preserve.
+            if arguments.is_empty() {
+                return None;
+            }
+
+            // Without generic definitions, collection inference still checks all values. Return
+            // `Unknown` in that case to avoid inferring them again. Specialization failures need
+            // ordinary call checking to report argument errors.
+            KnownClass::Dict
+                .try_to_class_literal(db, self.program_environment())
+                .and_then(|class| class.generic_context(db))
+                .is_none()
+                .then(Type::unknown)
+        })
     }
 }

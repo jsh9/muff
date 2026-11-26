@@ -2,6 +2,7 @@
 //! with some helper symbols
 
 use ruff_db::diagnostic::LintName;
+use strum::{EnumCount, VariantArray};
 use strum_macros::EnumIter;
 
 pub use codes::Rule;
@@ -12,16 +13,15 @@ use crate::codes::{self};
 
 mod rule_set;
 
-pub trait AsRule {
-    fn rule(&self) -> Rule;
-}
-
 impl Rule {
     pub fn from_code(code: &str) -> Result<Self, FromCodeError> {
         let (linter, code) = Linter::parse_code(code).ok_or(FromCodeError::Unknown)?;
         linter
             .all_rules()
-            .find(|rule| rule.noqa_code().suffix() == code)
+            .find(|rule| {
+                rule.noqa_code()
+                    .is_some_and(|rule_code| rule_code.suffix() == code)
+            })
             .ok_or(FromCodeError::Unknown)
     }
 }
@@ -231,7 +231,7 @@ pub trait RuleNamespace: Sized {
     fn url(&self) -> Option<&'static str>;
 }
 
-#[derive(is_macro::Is, Copy, Clone)]
+#[derive(is_macro::Is, Copy, Clone, strum_macros::EnumCount)]
 pub enum LintSource {
     Ast,
     Io,
@@ -241,7 +241,26 @@ pub enum LintSource {
     Imports,
     Noqa,
     Filesystem,
-    PyprojectToml,
+    /// A TOML config file, either `pyproject.toml`, `ruff.toml`, or `.ruff.toml`.
+    Toml,
+}
+
+impl LintSource {
+    /// Returns all rules checked by this lint source. The sets are built at compile time so
+    /// the linter can skip a pass when its set has no overlap with the enabled rules.
+    pub(crate) const fn rule_set(self) -> &'static RuleSet {
+        static RULES: [RuleSet; LintSource::COUNT] = {
+            let mut groups = [const { RuleSet::empty() }; LintSource::COUNT];
+            let mut remaining = Rule::VARIANTS;
+            while let [rule, rest @ ..] = remaining {
+                let group = &mut groups[rule.lint_source() as usize];
+                *group = RuleSet::from_rule(*rule).union(group);
+                remaining = rest;
+            }
+            groups
+        };
+        &RULES[self as usize]
+    }
 }
 
 impl Rule {
@@ -249,8 +268,14 @@ impl Rule {
     /// physical lines).
     pub const fn lint_source(&self) -> LintSource {
         match self {
-            Rule::InvalidPyprojectToml => LintSource::PyprojectToml,
-            Rule::BlanketNOQA | Rule::RedirectedNOQA | Rule::UnusedNOQA => LintSource::Noqa,
+            Rule::InvalidPyprojectToml | Rule::RenamedRule | Rule::RuleCodesInSelectors => {
+                LintSource::Toml
+            }
+            Rule::BlanketNOQA
+            | Rule::NoqaComments
+            | Rule::RenamedRuleInSuppressionComment
+            | Rule::RuleCodesInSuppressionComments
+            | Rule::UnusedSuppressionComment => LintSource::Noqa,
             Rule::BidirectionalUnicode
             | Rule::BlankLineWithWhitespace
             | Rule::DocLineTooLong
@@ -263,18 +288,18 @@ impl Rule {
             Rule::AmbiguousUnicodeCharacterComment
             | Rule::BlanketTypeIgnore
             | Rule::BlankLineAfterDecorator
-            | Rule::BlankLineBetweenMethods
-            | Rule::BlankLinesAfterFunctionOrClass
-            | Rule::BlankLinesBeforeNestedDefinition
-            | Rule::BlankLinesTopLevel
+            | Rule::MissingBlankLineBeforeMethod
+            | Rule::MissingBlankLinesAfterTopLevelDefinition
+            | Rule::MissingBlankLineBeforeNestedDefinition
+            | Rule::MissingBlankLinesBeforeTopLevelDefinition
             | Rule::CommentedOutCode
             | Rule::EmptyComment
             | Rule::ExtraneousParentheses
-            | Rule::InvalidCharacterBackspace
-            | Rule::InvalidCharacterEsc
-            | Rule::InvalidCharacterNul
-            | Rule::InvalidCharacterSub
-            | Rule::InvalidCharacterZeroWidthSpace
+            | Rule::UnescapedBackspaceCharacter
+            | Rule::UnescapedEscapeCharacter
+            | Rule::UnescapedNullCharacter
+            | Rule::UnescapedSubstituteCharacter
+            | Rule::UnescapedZeroWidthSpaceCharacter
             | Rule::InvalidTodoCapitalization
             | Rule::InvalidTodoTag
             | Rule::LineContainsFixme
@@ -290,11 +315,11 @@ impl Rule {
             | Rule::MultiLineImplicitStringConcatenation
             | Rule::MultipleStatementsOnOneLineColon
             | Rule::MultipleStatementsOnOneLineSemicolon
-            | Rule::ProhibitedTrailingComma
+            | Rule::UnnecessaryTrailingComma
             | Rule::ShebangLeadingWhitespace
-            | Rule::ShebangMissingExecutableFile
+            | Rule::ExecutableFileWithoutShebang
             | Rule::ShebangMissingPython
-            | Rule::ShebangNotExecutable
+            | Rule::NonExecutableFileWithShebang
             | Rule::ShebangNotFirstLine
             | Rule::SingleLineImplicitStringConcatenation
             | Rule::TabIndentation
@@ -338,45 +363,72 @@ impl Rule {
             | Rule::TooFewSpacesBeforeInlineComment
             | Rule::UnexpectedIndentation
             | Rule::UnexpectedIndentationComment
-            | Rule::UnexpectedSpacesAroundKeywordParameterEquals
+            | Rule::UnexpectedSpacesAroundArgumentOrParameterEquals
             | Rule::WhitespaceAfterOpenBracket
             | Rule::WhitespaceBeforeCloseBracket
-            | Rule::WhitespaceBeforeParameters
+            | Rule::WhitespaceBeforeOpenBracket
             | Rule::WhitespaceBeforePunctuation => LintSource::LogicalLines,
             _ => LintSource::Ast,
         }
     }
 
-    /// Return the URL for the rule documentation, if it exists.
-    pub fn url(&self) -> Option<String> {
-        self.explanation().is_some().then(|| {
-            format!(
-                "{}/rules/{name}",
-                env!("CARGO_PKG_HOMEPAGE"),
-                name = self.name()
-            )
-        })
+    /// Return the URL for the rule documentation.
+    pub fn url(&self) -> String {
+        // Every rule has documentation. Calling `explanation()` here would retain all
+        // documentation strings in binaries that only need the URLs.
+        format!(
+            "{}/rules/{name}",
+            env!("CARGO_PKG_HOMEPAGE"),
+            name = self.name()
+        )
     }
 
     pub fn name(&self) -> LintName {
         let name: &'static str = self.into();
         LintName::of(name)
     }
+
+    /// Return the rule's name, followed by its code in parentheses when available.
+    ///
+    /// For example:
+    ///
+    /// ```text
+    /// unused-import (F401)
+    /// ```
+    ///
+    /// When formatted with the `#` flag, both the name and code will be surrounded by backticks:
+    ///
+    /// ```text
+    /// `unused-import` (`F401`)
+    /// ```
+    pub fn name_and_code(&self) -> impl std::fmt::Display + use<> {
+        let rule = *self;
+        std::fmt::from_fn(move |f| {
+            let quote = if f.alternate() { "`" } else { "" };
+            write!(f, "{quote}{}{quote}", rule.name())?;
+            if let Some(code) = rule.noqa_code() {
+                write!(f, " ({quote}{code}{quote})")?;
+            }
+            Ok(())
+        })
+    }
 }
 
 /// Pairs of checks that shouldn't be enabled together.
 pub const INCOMPATIBLE_CODES: &[(Rule, Rule, &str); 2] = &[
     (
-        Rule::BlankLineBeforeClass,
-        Rule::IncorrectBlankLineBeforeClass,
-        "`incorrect-blank-line-before-class` (D203) and `no-blank-line-before-class` (D211) are \
-         incompatible. Ignoring `incorrect-blank-line-before-class`.",
+        Rule::BlankLineBeforeClassDocstring,
+        Rule::IncorrectBlankLineBeforeClassDocstring,
+        "`incorrect-blank-line-before-class-docstring` (D203) and \
+         `blank-line-before-class-docstring` (D211) are incompatible. \
+         Ignoring `incorrect-blank-line-before-class-docstring`.",
     ),
     (
-        Rule::MultiLineSummaryFirstLine,
-        Rule::MultiLineSummarySecondLine,
-        "`multi-line-summary-first-line` (D212) and `multi-line-summary-second-line` (D213) are \
-         incompatible. Ignoring `multi-line-summary-second-line`.",
+        Rule::MultilineDocstringSummaryOnSeparateLine,
+        Rule::MultilineDocstringSummaryOnFirstLine,
+        "`multiline-docstring-summary-on-separate-line` (D212) and \
+         `multiline-docstring-summary-on-first-line` (D213) are incompatible. \
+         Ignoring `multiline-docstring-summary-on-first-line`.",
     ),
 ];
 
@@ -396,12 +448,17 @@ pub mod clap_completion {
     impl RuleParser {
         fn values() -> impl Iterator<Item = PossibleValue> {
             Rule::iter().flat_map(|rule| {
-                let code = rule.noqa_code().to_string();
                 let name = rule.name().as_str();
-                [
-                    PossibleValue::new(&code).help(name),
-                    PossibleValue::new(name).help(code),
-                ]
+                let (code, name) = if let Some(code) = rule.noqa_code() {
+                    let code = code.to_string();
+                    (
+                        Some(PossibleValue::new(&code).help(name)),
+                        PossibleValue::new(name).help(code),
+                    )
+                } else {
+                    (None, PossibleValue::new(name))
+                };
+                code.into_iter().chain(std::iter::once(name))
             })
         }
     }
@@ -451,7 +508,7 @@ mod tests {
     fn documentation() {
         for rule in Rule::iter() {
             assert!(
-                rule.explanation().is_some(),
+                !rule.explanation().trim().is_empty(),
                 "Rule {} is missing documentation",
                 rule.name()
             );
@@ -483,8 +540,12 @@ mod tests {
     #[test]
     fn check_code_serialization() {
         for rule in Rule::iter() {
+            let Some(code) = rule.noqa_code() else {
+                continue;
+            };
+
             assert!(
-                Rule::from_code(&format!("{}", rule.noqa_code())).is_ok(),
+                Rule::from_code(&code.to_string()).is_ok(),
                 "{rule:?} could not be round-trip serialized."
             );
         }
@@ -493,7 +554,10 @@ mod tests {
     #[test]
     fn linter_parse_code() {
         for rule in Rule::iter() {
-            let code = format!("{}", rule.noqa_code());
+            let Some(code) = rule.noqa_code() else {
+                continue;
+            };
+            let code = code.to_string();
             let (linter, rest) =
                 Linter::parse_code(&code).unwrap_or_else(|| panic!("couldn't parse {code:?}"));
             assert_eq!(code, format!("{}{rest}", linter.common_prefix()));

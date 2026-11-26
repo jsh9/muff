@@ -4,14 +4,13 @@ use crate::member::{
     ScopedMemberId,
 };
 use crate::predicate::PatternPredicate;
-use crate::scope::FileScopeId;
 use crate::symbol::{ScopedSymbolId, Symbol, SymbolTable, SymbolTableBuilder};
 use crate::{Db, PossiblyNarrowedPlaces};
 use ruff_db::parsed::ParsedModuleRef;
-use ruff_index::IndexVec;
 use ruff_python_ast as ast;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::iter::FusedIterator;
 
 /// Return the expressions whose existing bindings a match pattern can narrow.
@@ -78,7 +77,7 @@ impl PlaceExpr {
             return Some(PlaceExpr::Symbol(Symbol::new(name.id.clone())));
         }
 
-        MemberExprBuilder::visit_expr(expr).and_then(Self::try_from_member_expr)
+        MemberExpr::try_from_expr(expr).map(|member| Self::Member(Member::new(member)))
     }
 
     /// Tries to create a `PlaceExpr` from a member expression.
@@ -109,6 +108,31 @@ pub enum PlaceExprRef<'a> {
 }
 
 impl<'a> PlaceExprRef<'a> {
+    /// Resolve each parent using the caller's symbol and member indexes.
+    fn parent_place_ids(
+        self,
+        symbol_id: impl Fn(&'a str) -> Option<ScopedSymbolId>,
+        member_id: impl Fn(MemberExprRef<'a>) -> Option<ScopedMemberId>,
+    ) -> impl FusedIterator<Item = ScopedPlaceId> {
+        let (parent, symbol) = match self {
+            Self::Symbol(_) => (None, None),
+            Self::Member(member) => {
+                let expr = member.expression().as_ref();
+                (expr.parent(), Some(expr.symbol_name()))
+            }
+        };
+
+        std::iter::successors(parent, MemberExprRef::parent)
+            .filter_map(member_id)
+            .map(ScopedPlaceId::Member)
+            .chain(
+                symbol
+                    .into_iter()
+                    .filter_map(symbol_id)
+                    .map(ScopedPlaceId::Symbol),
+            )
+    }
+
     /// Returns `Some` if the reference is a `Symbol`, otherwise `None`.
     pub const fn as_symbol(self) -> Option<&'a Symbol> {
         if let PlaceExprRef::Symbol(symbol) = self {
@@ -177,30 +201,39 @@ impl std::fmt::Display for PlaceExprRef<'_> {
 
 /// ID that uniquely identifies a place inside a [`Scope`](super::FileScopeId).
 #[derive(
-    Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, get_size2::GetSize, salsa::Update,
+    Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, get_size2::GetSize, salsa::SalsaValue,
 )]
 pub enum ScopedPlaceId {
     Symbol(ScopedSymbolId),
     Member(ScopedMemberId),
 }
 
-#[derive(Debug, Eq, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Eq, PartialEq, get_size2::GetSize)]
 pub struct PlaceTable {
     symbols: SymbolTable,
     members: MemberTable,
+}
+
+impl Hash for PlaceTable {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // The reverse-lookup indexes are also ignored by equality.
+        self.symbols.iter().as_slice().hash(state);
+        self.members.iter().as_slice().hash(state);
+    }
 }
 
 impl PlaceTable {
     /// Iterate over the "root" expressions of the place (e.g. `x.y.z`, `x.y`, `x` for `x.y.z[0]`).
     ///
     /// Note, this iterator may skip some parents if they are not defined in the current scope.
-    pub fn parents<'a>(&'a self, place_expr: impl Into<PlaceExprRef<'a>>) -> ParentPlaceIter<'a> {
-        match place_expr.into() {
-            PlaceExprRef::Symbol(_) => ParentPlaceIter::for_symbol(),
-            PlaceExprRef::Member(member) => {
-                ParentPlaceIter::for_member(member.expression(), &self.symbols, &self.members)
-            }
-        }
+    pub fn parents<'a>(
+        &'a self,
+        place_expr: impl Into<PlaceExprRef<'a>>,
+    ) -> impl FusedIterator<Item = ScopedPlaceId> {
+        place_expr.into().parent_place_ids(
+            |name| self.symbols.symbol_id(name),
+            |expr| self.members.member_id(expr),
+        )
     }
 
     /// Iterator over all symbols in this scope.
@@ -211,6 +244,28 @@ impl PlaceTable {
     /// Iterator over all members in this scope.
     pub fn members(&self) -> std::slice::Iter<'_, Member> {
         self.members.iter()
+    }
+
+    /// Receiver attributes that this scope can define. A read of `self.value` alone
+    /// does not establish `value` as an implicit attribute.
+    pub fn defined_instance_attribute_names(&self) -> impl Iterator<Item = &str> {
+        self.members
+            .iter()
+            .filter(|member| member.is_bound() || member.is_declared())
+            .filter_map(Member::as_instance_attribute)
+    }
+
+    /// Receiver attributes declared in this scope, such as `self.value: int`.
+    pub fn declared_instance_attributes(&self) -> impl Iterator<Item = (ScopedMemberId, &str)> {
+        self.members.iter().enumerate().filter_map(|(id, member)| {
+            if !member.is_declared() {
+                return None;
+            }
+            Some((
+                ScopedMemberId::from_usize(id),
+                member.as_instance_attribute()?,
+            ))
+        })
     }
 
     /// Looks up a symbol by its ID and returns a reference to it.
@@ -277,13 +332,13 @@ pub struct PlaceTableBuilder {
     symbols: SymbolTableBuilder,
     member: MemberTableBuilder,
 
-    associated_symbol_members: IndexVec<ScopedSymbolId, SmallVec<[ScopedMemberId; 4]>>,
-    associated_sub_members: IndexVec<ScopedMemberId, SmallVec<[ScopedMemberId; 4]>>,
+    /// Only places with descendants need an entry.
+    associated_members: FxHashMap<ScopedPlaceId, SmallVec<[ScopedMemberId; 4]>>,
 }
 
 impl PlaceTableBuilder {
     /// Looks up a place ID by its expression.
-    pub fn place_id(&self, expression: PlaceExprRef) -> Option<ScopedPlaceId> {
+    pub(crate) fn place_id(&self, expression: PlaceExprRef) -> Option<ScopedPlaceId> {
         match expression {
             PlaceExprRef::Symbol(symbol) => self.symbols.symbol_id(symbol.name()).map(Into::into),
             PlaceExprRef::Member(member) => {
@@ -311,12 +366,12 @@ impl PlaceTableBuilder {
     }
 
     #[track_caller]
-    pub(super) fn member_mut(&mut self, id: ScopedMemberId) -> &mut Member {
+    fn member_mut(&mut self, id: ScopedMemberId) -> &mut Member {
         self.member.member_mut(id)
     }
 
     #[track_caller]
-    pub fn place(&self, place_id: impl Into<ScopedPlaceId>) -> PlaceExprRef<'_> {
+    pub(crate) fn place(&self, place_id: impl Into<ScopedPlaceId>) -> PlaceExprRef<'_> {
         match place_id.into() {
             ScopedPlaceId::Symbol(id) => PlaceExprRef::Symbol(self.symbols.symbol(id)),
             ScopedPlaceId::Member(id) => PlaceExprRef::Member(self.member.member(id)),
@@ -324,55 +379,45 @@ impl PlaceTableBuilder {
     }
 
     pub(crate) fn associated_place_ids(&self, place: ScopedPlaceId) -> &[ScopedMemberId] {
-        match place {
-            ScopedPlaceId::Symbol(symbol) => &self.associated_symbol_members[symbol],
-            ScopedPlaceId::Member(member) => &self.associated_sub_members[member],
-        }
+        self.associated_members
+            .get(&place)
+            .map_or(&[], SmallVec::as_slice)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = PlaceExprRef<'_>> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = PlaceExprRef<'_>> {
         self.symbols
             .iter()
             .map(Into::into)
             .chain(self.member.iter().map(PlaceExprRef::Member))
     }
 
-    pub fn symbols(&self) -> impl Iterator<Item = &Symbol> {
+    pub(crate) fn symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.symbols.iter()
     }
 
-    pub fn add_symbol(&mut self, symbol: Symbol) -> (ScopedSymbolId, bool) {
-        let (id, is_new) = self.symbols.add(symbol);
-
-        if is_new {
-            let new_id = self.associated_symbol_members.push(SmallVec::new_const());
-            debug_assert_eq!(new_id, id);
-        }
-
-        (id, is_new)
+    /// Add an unmarked symbol, taking ownership of a name only on its first occurrence.
+    pub(crate) fn add_name(&mut self, name: &ast::name::Name) -> (ScopedSymbolId, bool) {
+        self.symbols.add_name(name)
     }
 
-    pub fn add_member(&mut self, member: Member) -> (ScopedMemberId, bool) {
+    pub(crate) fn add_symbol(&mut self, symbol: Symbol) -> (ScopedSymbolId, bool) {
+        self.symbols.add(symbol)
+    }
+
+    fn add_member(&mut self, member: Member) -> (ScopedMemberId, bool) {
         let (id, is_new) = self.member.add(member);
 
         if is_new {
-            let new_id = self.associated_sub_members.push(SmallVec::new_const());
-            debug_assert_eq!(new_id, id);
-
             let member = self.member.member(id);
 
-            // iterate over parents
-            for parent_id in
-                ParentPlaceIter::for_member(member.expression(), &self.symbols, &self.member)
-            {
-                match parent_id {
-                    ScopedPlaceId::Symbol(scoped_symbol_id) => {
-                        self.associated_symbol_members[scoped_symbol_id].push(id);
-                    }
-                    ScopedPlaceId::Member(scoped_member_id) => {
-                        self.associated_sub_members[scoped_member_id].push(id);
-                    }
-                }
+            for parent_id in PlaceExprRef::Member(member).parent_place_ids(
+                |name| self.symbols.symbol_id(name),
+                |expr| self.member.member_id(expr),
+            ) {
+                self.associated_members
+                    .entry(parent_id)
+                    .or_default()
+                    .push(id);
             }
         }
 
@@ -416,7 +461,7 @@ impl PlaceTableBuilder {
         }
     }
 
-    pub fn finish(self) -> PlaceTable {
+    pub(crate) fn finish(self) -> PlaceTable {
         PlaceTable {
             symbols: self.symbols.build(),
             members: self.member.build(),
@@ -449,14 +494,6 @@ impl ScopedPlaceId {
             }
         }
     }
-
-    pub const fn as_member(self) -> Option<ScopedMemberId> {
-        if let ScopedPlaceId::Member(id) = self {
-            Some(id)
-        } else {
-            None
-        }
-    }
 }
 
 impl<T> std::ops::Index<ScopedPlaceId> for Vec<T> {
@@ -481,121 +518,6 @@ impl From<ScopedSymbolId> for ScopedPlaceId {
         Self::Symbol(value)
     }
 }
-
-/// ID that uniquely identifies a place in a file.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct FilePlaceId {
-    scope: FileScopeId,
-    scoped_place_id: ScopedPlaceId,
-}
-
-impl FilePlaceId {
-    pub fn scope(self) -> FileScopeId {
-        self.scope
-    }
-
-    pub(crate) fn scoped_place_id(self) -> ScopedPlaceId {
-        self.scoped_place_id
-    }
-}
-
-impl From<FilePlaceId> for ScopedPlaceId {
-    fn from(val: FilePlaceId) -> Self {
-        val.scoped_place_id()
-    }
-}
-
-pub struct ParentPlaceIter<'a> {
-    state: Option<ParentPlaceIterState<'a>>,
-}
-
-enum ParentPlaceIterState<'a> {
-    Symbol {
-        symbol_name: &'a str,
-        symbols: &'a SymbolTable,
-    },
-    Member {
-        symbols: &'a SymbolTable,
-        members: &'a MemberTable,
-        next_member: MemberExprRef<'a>,
-    },
-}
-
-impl<'a> ParentPlaceIterState<'a> {
-    fn parent_state(
-        expression: &MemberExprRef<'a>,
-        symbols: &'a SymbolTable,
-        members: &'a MemberTable,
-    ) -> Self {
-        match expression.parent() {
-            Some(parent) => Self::Member {
-                next_member: parent,
-                symbols,
-                members,
-            },
-            None => Self::Symbol {
-                symbol_name: expression.symbol_name(),
-                symbols,
-            },
-        }
-    }
-}
-
-impl<'a> ParentPlaceIter<'a> {
-    pub(super) fn for_symbol() -> Self {
-        ParentPlaceIter { state: None }
-    }
-
-    pub(super) fn for_member(
-        expression: &'a MemberExpr,
-        symbol_table: &'a SymbolTable,
-        member_table: &'a MemberTable,
-    ) -> Self {
-        let expr_ref = expression.as_ref();
-        ParentPlaceIter {
-            state: Some(ParentPlaceIterState::parent_state(
-                &expr_ref,
-                symbol_table,
-                member_table,
-            )),
-        }
-    }
-}
-
-impl Iterator for ParentPlaceIter<'_> {
-    type Item = ScopedPlaceId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.state.take()? {
-                ParentPlaceIterState::Symbol {
-                    symbol_name,
-                    symbols,
-                } => {
-                    let id = symbols.symbol_id(symbol_name)?;
-                    break Some(id.into());
-                }
-                ParentPlaceIterState::Member {
-                    symbols,
-                    members,
-                    next_member,
-                } => {
-                    self.state = Some(ParentPlaceIterState::parent_state(
-                        &next_member,
-                        symbols,
-                        members,
-                    ));
-
-                    if let Some(id) = members.member_id(next_member) {
-                        break Some(id.into());
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl FusedIterator for ParentPlaceIter<'_> {}
 
 /// Builder for computing the conservative set of places that could possibly be narrowed.
 ///
@@ -627,9 +549,19 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
 
     fn expression_node(&self, expr: &ast::Expr) -> PossiblyNarrowedPlaces {
         match expr {
-            // Simple expressions that directly narrow a place
-            ast::Expr::Name(_) | ast::Expr::Attribute(_) | ast::Expr::Subscript(_) => {
-                self.simple_expr(expr)
+            // Simple expressions that directly narrow a place.
+            ast::Expr::Name(_) => self.simple_expr(expr),
+            // Attribute truthiness can also narrow its base (nominal tagged unions).
+            ast::Expr::Attribute(attribute) => {
+                let mut places = self.simple_expr(expr);
+                places.extend(self.simple_expr(&attribute.value));
+                places
+            }
+            // Subscript truthiness can also narrow its base (`TypedDict` and tuple unions).
+            ast::Expr::Subscript(subscript) => {
+                let mut places = self.simple_expr(expr);
+                places.extend(self.simple_expr(&subscript.value));
+                places
             }
             // Compare expressions can narrow places on either side
             ast::Expr::Compare(expr_compare) => self.expr_compare(expr_compare),
@@ -669,32 +601,25 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
     fn expr_compare(&self, expr_compare: &ast::ExprCompare) -> PossiblyNarrowedPlaces {
         let mut places = PossiblyNarrowedPlaces::default();
 
-        // The left side can be narrowed
-        self.add_narrowing_target(&expr_compare.left, &mut places);
-
-        // Each comparator can also be narrowed
-        for comparator in &expr_compare.comparators {
-            self.add_narrowing_target(comparator, &mut places);
+        for operand in &expr_compare.operands {
+            self.add_narrowing_target(operand, &mut places);
         }
 
-        let can_narrow_attribute_base =
-            matches!(&*expr_compare.ops, [ast::CmpOp::Eq | ast::CmpOp::NotEq]);
-        let can_narrow_subscript_base = matches!(
+        let can_narrow_tagged_union_base = matches!(
             &*expr_compare.ops,
             [ast::CmpOp::Eq | ast::CmpOp::NotEq | ast::CmpOp::Is | ast::CmpOp::IsNot]
         );
 
-        // For subscript expressions on either side, the subscript base can also be narrowed.
-        // (TypedDict and tuple discriminated union narrowing.)
-        for expr in std::iter::once(&*expr_compare.left).chain(&expr_compare.comparators) {
-            if can_narrow_subscript_base
+        // Tagged-union checks can also narrow the base of a subscript or attribute on either side.
+        for expr in &expr_compare.operands {
+            if can_narrow_tagged_union_base
                 && let ast::Expr::Subscript(subscript) = expr.expression_value()
                 && let Some(place_expr) = PlaceExpr::try_from_expr(&subscript.value)
                 && let Some(place) = self.places.place_id((&place_expr).into())
             {
                 places.insert(place);
             }
-            if can_narrow_attribute_base
+            if can_narrow_tagged_union_base
                 && let ast::Expr::Attribute(attribute) = expr
                 && let Some(place_expr) = PlaceExpr::try_from_expr(&attribute.value)
                 && let Some(place) = self.places.place_id((&place_expr).into())
@@ -713,14 +638,29 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
 
         // Under the current narrowing semantics, we only ever use the first two positional
         // arguments: argument 0 for most narrowing calls, and argument 1 for unbound
-        // TypeGuard/TypeIs methods (e.g. `C.f(C(), x)`).
-        // This set is only a conservative upper bound, so if later positional arguments ever
-        // become narrowable we can widen this scan again.
-        for argument in expr_call.arguments.args.iter().take(2) {
-            if let Some(place_expr) = PlaceExpr::try_from_expr(argument) {
-                if let Some(place) = self.places.place_id((&place_expr).into()) {
-                    places.insert(place);
-                }
+        // TypeGuard/TypeIs methods (e.g. `C.f(C(), x)`). TypeGuard and TypeIs calls can also
+        // narrow an explicit keyword argument. We don't know which keyword maps to the target
+        // parameter while building the semantic index, so include every explicit keyword here.
+        // This set is only a conservative upper bound.
+        for argument in expr_call.arguments.args.iter().take(2).chain(
+            expr_call
+                .arguments
+                .keywords
+                .iter()
+                .filter(|keyword| keyword.arg.is_some())
+                .map(|keyword| &keyword.value),
+        ) {
+            if let Some(place_expr) = PlaceExpr::try_from_expr(argument)
+                && let Some(place) = self.places.place_id((&place_expr).into())
+            {
+                places.insert(place);
+            }
+            // Checking a tuple element can also eliminate alternatives of its tuple union.
+            if let ast::Expr::Subscript(subscript) = argument.expression_value()
+                && let Some(place_expr) = PlaceExpr::try_from_expr(&subscript.value)
+                && let Some(place) = self.places.place_id((&place_expr).into())
+            {
+                places.insert(place);
             }
         }
 

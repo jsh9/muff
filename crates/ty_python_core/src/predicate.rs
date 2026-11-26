@@ -7,14 +7,17 @@
 //! - [_Reachability constraints_][crate::reachability_constraints] determine the
 //!   static reachability of a binding, and the reachability of a statement or expression.
 
+use crate::Program;
+use ruff_db::PythonFile;
 use ruff_db::files::File;
 use ruff_index::{FrozenIndexVec, Idx, IndexVec};
-use ruff_python_ast::{Singleton, name::Name};
+use ruff_python_ast::{self as ast, Singleton, name::Name};
 
+use crate::ProgramFile;
 use crate::ast_ids::ExpressionNodeKey;
 use crate::db::Db;
 use crate::expression::Expression;
-use crate::global_scope;
+use crate::reachability_constraints::ScopedReachabilityConstraintId;
 use crate::scope::{FileScopeId, ScopeId};
 use crate::symbol::ScopedSymbolId;
 
@@ -72,13 +75,13 @@ impl<'db> PredicatesBuilder<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct Predicate<'db> {
     pub node: PredicateNode<'db>,
     pub is_positive: bool,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize)]
 pub(crate) enum PredicateOrLiteral<'db> {
     Literal(bool),
     Predicate(Predicate<'db>),
@@ -98,19 +101,87 @@ impl PredicateOrLiteral<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+/// A call-completion query key owned by the semantic index that creates its expressions.
+///
+/// Creating it while building predicates lets cached queries use its ID directly, without looking
+/// up its components in Salsa's intern table again.
+///
+/// Tracking the key keeps unrelated revisions from collecting it and invalidating that index.
+#[salsa::tracked(debug, heap_size=ruff_memory_usage::heap_size)]
 pub struct CallableAndCallExpr<'db> {
+    #[returns(copy)]
     pub callable: Expression<'db>,
+    #[returns(copy)]
     pub call_expr: Expression<'db>,
     /// Whether the call is wrapped in an `await` expression. If `true`, `call_expr` refers to the
     /// `await` expression rather than the call itself. This is used to detect terminal `await`s of
     /// async functions that return `Never`.
+    #[returns(copy)]
     pub is_await: bool,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+// The Salsa heap is tracked separately.
+impl get_size2::GetSize for CallableAndCallExpr<'_> {}
+
+/// A call whose completion determines whether an expression statement can continue.
+#[derive(Debug)]
+pub struct StatementCall<'ast> {
+    pub call: &'ast ast::ExprCall,
+    pub is_await: bool,
+}
+
+impl<'ast> StatementCall<'ast> {
+    /// Extracts a direct or awaited call for checking whether an expression statement can return.
+    ///
+    /// Callers pass the value of an expression statement, such as `sys.exit()` or `await stop()`.
+    /// The semantic-index builder uses the returned call to record a reachability constraint:
+    /// if the call returns `Never`, subsequent statements are unreachable. The
+    /// `redundant-condition-strict` rule uses the same extraction when recognizing defensive exits.
+    ///
+    /// The `is_await` flag matters for async functions returning `Never`: calling one creates a
+    /// coroutine, while awaiting it prevents execution from continuing.
+    ///
+    /// Calls inside larger expressions, such as `1 + sys.exit()`, are deliberately excluded.
+    /// Tracking their termination would require many more reachability constraints and degrade
+    /// analysis performance.
+    pub fn from_expression(expression: &'ast ast::Expr) -> Option<Self> {
+        match expression {
+            ast::Expr::Call(call) => Some(Self {
+                call,
+                is_await: false,
+            }),
+            ast::Expr::Await(ast::ExprAwait { value, .. }) => {
+                value.as_call_expr().map(|call| Self {
+                    call,
+                    is_await: true,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub enum PredicateNode<'db> {
+    /// The truthiness of an expression in its evaluation context.
     Expression(Expression<'db>),
+    /// Whether a context manager's exit return type allows an exception to be suppressed.
+    ///
+    /// Resolved during type inference because the context manager's type is unavailable during
+    /// semantic indexing.
+    ContextManagerSuppresses {
+        expression: Expression<'db>,
+        is_async: bool,
+    },
+    /// Whether semantic evaluation rules out every normal entry into a `finally` suite.
+    ///
+    /// The continuation is captured before constructing this predicate, so its constraint cannot
+    /// depend on the predicate itself. Deferring evaluation preserves terminal cleanup paths when
+    /// a context manager's suppression behavior is unavailable during semantic indexing.
+    FinallyNormalPathImpossible {
+        scope: ScopeId<'db>,
+        continuation: ScopedReachabilityConstraintId,
+    },
     /// These predicates are recorded for statements with call expressions. As part of
     /// reachability constraints, they are used to determine whether control flow can
     /// continue past this statement or not.
@@ -135,6 +206,10 @@ pub enum PredicateNode<'db> {
     /// semantically during type checking, so calls to a shadowed `range` remain ambiguous.
     IsNonEmptyIterable(Expression<'db>),
     Pattern(PatternPredicate<'db>),
+    /// Whether control flow takes one branch of an OR pattern instead of its remaining
+    /// alternatives. The selected branch is unknown, but recording a predicate and its negation
+    /// preserves the fact that exactly one branch is taken.
+    OrPatternAlternative(ScopeId<'db>),
     SubjectElementPattern(SubjectElementPatternPredicate<'db>),
     StarImportPlaceholder(StarImportPlaceholderPredicate<'db>),
 }
@@ -143,14 +218,14 @@ pub enum PredicateNode<'db> {
 ///
 /// The full pattern determines the predicate's truth value, while `target` selects the subject
 /// occurrence whose aligned pattern constraint should be applied to a binding.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct SubjectElementPatternPredicate<'db> {
     pub pattern: PatternPredicate<'db>,
     pub target: ExpressionNodeKey,
 }
 
 /// Structural details for sequence patterns that affect narrowing and reachability.
-#[derive(Debug, Clone, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct SequencePatternPredicateKind<'db> {
     pub patterns: Box<[PatternPredicateKind<'db>]>,
 }
@@ -176,7 +251,7 @@ impl<'db> SequencePatternPredicateKind<'db> {
 }
 
 /// Structural details for a class pattern.
-#[derive(Debug, Clone, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ClassPatternPredicateKind<'db> {
     pub class: Expression<'db>,
     pub positional: Box<[PatternPredicateKind<'db>]>,
@@ -189,14 +264,14 @@ impl ClassPatternPredicateKind<'_> {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ClassPatternKeywordPredicateKind<'db> {
     pub attr: Name,
     pub pattern: PatternPredicateKind<'db>,
 }
 
 /// Structural details for a mapping pattern.
-#[derive(Debug, Clone, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct MappingPatternPredicateKind<'db> {
     pub entries: Box<[MappingPatternEntryPredicateKind<'db>]>,
     pub rest: Option<Name>,
@@ -208,7 +283,7 @@ impl MappingPatternPredicateKind<'_> {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct MappingPatternEntryPredicateKind<'db> {
     pub key: Expression<'db>,
     pub pattern: PatternPredicateKind<'db>,
@@ -216,7 +291,7 @@ pub struct MappingPatternEntryPredicateKind<'db> {
 
 /// Pattern structure used for type narrowing, static reachability, and inferring the types of
 /// names bound by a successful match.
-#[derive(Debug, Clone, Hash, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub enum PatternPredicateKind<'db> {
     Singleton(Singleton),
     Value(Expression<'db>),
@@ -230,18 +305,23 @@ pub enum PatternPredicateKind<'db> {
 
 #[salsa::tracked(debug, heap_size=ruff_memory_usage::heap_size)]
 pub struct PatternPredicate<'db> {
-    pub file: File,
+    #[returns(copy)]
+    pub program_file: ProgramFile<'db>,
 
+    #[returns(copy)]
     pub file_scope: FileScopeId,
 
+    #[returns(copy)]
     pub subject: Expression<'db>,
 
     #[returns(ref)]
     pub kind: PatternPredicateKind<'db>,
 
+    #[returns(copy)]
     pub guard: Option<Expression<'db>>,
 
     /// A reference to the pattern of the previous match case
+    #[returns(as_deref)]
     pub previous_predicate: Option<Box<PatternPredicate<'db>>>,
 }
 
@@ -249,10 +329,35 @@ pub struct PatternPredicate<'db> {
 impl get_size2::GetSize for PatternPredicate<'_> {}
 
 impl<'db> PatternPredicate<'db> {
+    pub fn file(self, db: &'db dyn Db) -> File {
+        self.program_file(db).file(db)
+    }
+
+    pub fn python_file(self, db: &'db dyn Db) -> PythonFile<'db> {
+        self.program_file(db).python_file(db)
+    }
+
     pub fn scope(self, db: &'db dyn Db) -> ScopeId<'db> {
-        self.file_scope(db).to_scope_id(db, self.file(db))
+        self.file_scope(db).to_scope_id(db, self.program_file(db))
+    }
+
+    pub fn program(self, db: &'db dyn Db) -> Program<'db> {
+        self.scope(db).program(db)
     }
 }
+
+/// The scope and source module shared by all the predicates for a single `*` import.
+#[salsa::tracked(debug, heap_size=ruff_memory_usage::heap_size)]
+pub struct StarImportContext<'db> {
+    #[returns(copy)]
+    pub scope: ScopeId<'db>,
+
+    #[returns(copy)]
+    pub referenced_file: ProgramFile<'db>,
+}
+
+// The Salsa heap is tracked separately.
+impl get_size2::GetSize for StarImportContext<'_> {}
 
 /// A "placeholder predicate" that is used to model the fact that the boundness of a (possible)
 /// definition or declaration caused by a `*` import cannot be fully determined until type-
@@ -274,7 +379,7 @@ impl<'db> PatternPredicate<'db> {
 /// from exporter import *
 /// ```
 ///
-/// Since we cannot know whether or not <condition> is true at semantic-index time, we record
+/// Since we cannot know whether `<condition>` is true at semantic-index time, we record
 /// a definition for `A` in `importer.py` as a result of the `from exporter import *` statement,
 /// but place a predicate on it to record the fact that we don't yet know whether this definition
 /// will be visible from all control-flow paths or not. Essentially, we model `importer.py` as
@@ -284,43 +389,16 @@ impl<'db> PatternPredicate<'db> {
 /// A = 1
 ///
 /// if <star_import_placeholder_predicate>:
-///     from a import A
+///     from exporter import A
 /// ```
 ///
-/// At type-check time, the placeholder predicate for the `A` definition is evaluated by attempting
-/// to resolve the `A` symbol in `exporter.py`'s global namespace:
-/// - If it resolves to a definitely bound symbol, then the predicate resolves to [`Truthiness::AlwaysTrue`]
-/// - If it resolves to an unbound symbol, then the predicate resolves to [`Truthiness::AlwaysFalse`]
-/// - If it resolves to a possibly bound symbol, then the predicate resolves to [`Truthiness::Ambiguous`]
-///
-/// [Truthiness]: [crate::types::Truthiness]
-#[salsa::tracked(debug, heap_size=ruff_memory_usage::heap_size)]
+/// At type-check time, the predicate is true if `A` is definitely bound in
+/// `exporter.py`, false if it's unbound, and ambiguous if it's possibly bound.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct StarImportPlaceholderPredicate<'db> {
-    pub importing_file: File,
-
-    /// Each symbol imported by a `*` import has a separate predicate associated with it:
-    /// this field identifies which symbol that is.
-    ///
-    /// Note that a [`ScopedPlaceId`] is only meaningful if you also know the scope
-    /// it is relative to. For this specific struct, however, there's no need to store a
-    /// separate field to hold the ID of the scope. `StarImportPredicate`s are only created
-    /// for valid `*`-import definitions, and valid `*`-import definitions can only ever
-    /// exist in the global scope; thus, we know that the `symbol_id` here will be relative
-    /// to the global scope of the importing file.
+    pub import: StarImportContext<'db>,
+    /// The imported symbol in the importing scope.
     pub symbol_id: ScopedSymbolId,
-
-    pub referenced_file: File,
-}
-
-// The Salsa heap is tracked separately.
-impl get_size2::GetSize for StarImportPlaceholderPredicate<'_> {}
-
-impl<'db> StarImportPlaceholderPredicate<'db> {
-    pub fn scope(self, db: &'db dyn Db) -> ScopeId<'db> {
-        // See doc-comment above [`StarImportPlaceholderPredicate::symbol_id`]:
-        // valid `*`-import definitions can only take place in the global scope.
-        global_scope(db, self.importing_file(db))
-    }
 }
 
 impl<'db> From<StarImportPlaceholderPredicate<'db>> for PredicateOrLiteral<'db> {

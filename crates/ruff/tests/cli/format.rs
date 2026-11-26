@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use indoc::indoc;
 use insta_cmd::assert_cmd_snapshot;
 
 use super::CliTest;
@@ -43,6 +44,34 @@ if condition:
 }
 
 #[test]
+fn stdin_read_error() -> Result<()> {
+    let test = CliTest::new()?;
+
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--stdin-filename", "input.py", "-"])
+        .pass_stdin([0xff]), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to read input.py: stream did not contain valid UTF-8
+    ");
+
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--silent", "--stdin-filename", "input.py", "-"])
+        .pass_stdin([0xff]), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn default_files() -> Result<()> {
     let test = CliTest::with_files([
         ("foo.py", r#"foo =     "needs formatting""#),
@@ -51,16 +80,28 @@ fn default_files() -> Result<()> {
 
     assert_cmd_snapshot!(test.format_command()
         .arg("--isolated")
-        .arg("--check"), @"
+        .arg("--check"), @r#"
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: bar.py
-    Would reformat: foo.py
+    unformatted: File would be reformatted
+     --> bar.py:1:7
+      |
+      - bar =     "needs formatting"
+    1 + bar = "needs formatting"
+      |
+
+    unformatted: File would be reformatted
+     --> foo.py:1:7
+      |
+      - foo =     "needs formatting"
+    1 + foo = "needs formatting"
+      |
+
     2 files would be reformatted
 
     ----- stderr -----
-    ");
+    "#);
 
     Ok(())
 }
@@ -249,6 +290,9 @@ fn format_options() -> Result<()> {
         r#"
 indent-width = 8
 line-length = 84
+
+[lint]
+isort.split-on-trailing-comma = false
 
 [format]
 indent-style = "tab"
@@ -446,16 +490,30 @@ OTHER = "OTHER"
         // Explicitly pass test.py, should be formatted regardless of it being excluded by format.exclude
         .arg("test.py")
         // Format all other files in the directory, should respect the `exclude` and `format.exclude` options
-        .arg("."), @"
+        .arg("."), @r#"
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
-    Would reformat: test.py
+    unformatted: File would be reformatted
+     --> main.py:1:1
+      |
+      -
+    1 | from test import say_hy
+      |
+
+    unformatted: File would be reformatted
+     --> test.py:1:1
+      |
+      -
+    1 | def say_hy(name: str):
+      -         print(f"Hy {name}")
+    2 +     print(f"Hy {name}")
+      |
+
     2 files would be reformatted
 
     ----- stderr -----
-    ");
+    "#);
     Ok(())
 }
 
@@ -490,7 +548,13 @@ exclude = ["format_excluded.py"]
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
+    unformatted: File would be reformatted
+     --> main.py:1:3
+      |
+      - x    = 1
+    1 + x = 1
+      |
+
     1 file would be reformatted
 
     ----- stderr -----
@@ -512,7 +576,13 @@ fn deduplicate_directory_and_explicit_file() -> Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
+    unformatted: File would be reformatted
+     --> main.py:1:3
+      |
+      - x   = 1
+    1 + x = 1
+      |
+
     1 file would be reformatted
 
     ----- stderr -----
@@ -538,9 +608,14 @@ from module import =
     success: false
     exit_code: 2
     ----- stdout -----
+    invalid-syntax: Expected an import name
+     --> main.py:2:20
+      |
+    2 | from module import =
+      |                    ^
+
 
     ----- stderr -----
-    error: Failed to parse main.py:2:20: Expected an import name
     ");
 
     Ok(())
@@ -565,7 +640,13 @@ if __name__ == "__main__":
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
+    unformatted: File would be reformatted
+     --> main.py:1:1
+      |
+      -
+    1 | from test import say_hy
+      |
+
     1 file would be reformatted
 
     ----- stderr -----
@@ -616,25 +697,15 @@ if __name__ == "__main__":
     say_hy("dear Ruff contributor")
 "#;
 
-    let test = CliTest::with_settings(|_project_dir, mut settings| {
-        // JSON double escapes backslashes
-        settings.add_filter(r#""[^"]+\\?/?input.py"#, r#""[TMP]/input.py"#);
-
-        settings
-    })?;
+    let test = CliTest::with_settings(crate::output_format_settings)?;
     test.write_file("input.py", CONTENT)?;
 
     let snapshot = format!("output_format_{output_format}");
 
     assert_cmd_snapshot!(
         snapshot,
-        test.format_command().args([
-            "--output-format",
-            output_format,
-            "--preview",
-            "--check",
-            "input.py",
-        ]),
+        test.format_command()
+            .args(["--output-format", output_format, "--check", "input.py",]),
     );
 
     Ok(())
@@ -646,13 +717,13 @@ fn output_format_notebook() -> Result<()> {
     let path = test.fixture_path("unformatted.ipynb");
 
     assert_cmd_snapshot!(
-        test.format_command().args(["--isolated", "--preview", "--check"]).arg(path),
+        test.format_command().args(["--isolated", "--check"]).arg(path),
         @"
     success: false
     exit_code: 1
     ----- stdout -----
     unformatted: File would be reformatted
-      --> CRATE_ROOT/resources/test/fixtures/unformatted.ipynb:cell 1:1:1
+      --> CRATE_ROOT/resources/test/fixtures/unformatted.ipynb:cell 1:2:1
      ::: cell 1
       |
     1 | import numpy
@@ -786,7 +857,15 @@ fn check_quiet_mode_shows_diagnostics_only() -> Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
+    unformatted: File would be reformatted
+     --> main.py:1:5
+      |
+      - def     foo():
+      -                 pass
+    1 + def foo():
+    2 +     pass
+      |
+
 
     ----- stderr -----
     ");
@@ -802,7 +881,35 @@ fn check_default_mode_shows_diagnostics_and_summary() -> Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
+    unformatted: File would be reformatted
+     --> main.py:1:5
+      |
+      - def     foo():
+      -                 pass
+    1 + def foo():
+    2 +     pass
+      |
+
+    1 file would be reformatted
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+#[test]
+fn check_bom_only_file() -> Result<()> {
+    let test = CliTest::with_file("example.py", "\u{feff}")?;
+    assert_cmd_snapshot!(test.format_command().args(["--check", "example.py"]), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    unformatted: File would be reformatted
+     --> example.py:1:1
+      |
+      - �
+      |
+
     1 file would be reformatted
 
     ----- stderr -----
@@ -859,7 +966,13 @@ OTHER = "OTHER"
     success: false
     exit_code: 1
     ----- stdout -----
-    Would reformat: main.py
+    unformatted: File would be reformatted
+     --> main.py:1:1
+      |
+      -
+    1 | from test import say_hy
+      |
+
     1 file would be reformatted
 
     ----- stderr -----
@@ -994,7 +1107,7 @@ if condition:
     	print('Should change quotes')
 
     ----- stderr -----
-    warning: The following rule may cause conflicts when used with the formatter: `COM812`. To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
+    warning: The following rule may cause conflicts when used with the formatter: `missing-trailing-comma` (`COM812`). To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
     "#);
     Ok(())
 }
@@ -1118,13 +1231,13 @@ def say_hy(name: str):
     1 file reformatted
 
     ----- stderr -----
-    warning: The following rule may cause conflicts when used with the formatter: `COM812`. To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
-    warning: The `format.indent-style="tab"` option is incompatible with `W191`, which lints against all uses of tabs. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
-    warning: The `lint.flake8-implicit-str-concat.allow-multiline = false` option is incompatible with the formatter unless `ISC001` is enabled. We recommend enabling `ISC001` or setting `allow-multiline=true`.
-    warning: The `format.indent-style="tab"` option is incompatible with `D206`, with requires space-based indentation. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
-    warning: The `flake8-quotes.inline-quotes="single"` option is incompatible with the formatter's `format.quote-style="double"`. We recommend disabling `Q000` and `Q003` when using the formatter, which enforces a consistent quote style. Alternatively, set both options to either `"single"` or `"double"`.
-    warning: The `flake8-quotes.multiline-quotes="single"` option is incompatible with the formatter. We recommend disabling `Q001` when using the formatter, which enforces double quotes for multiline strings. Alternatively, set the `flake8-quotes.multiline-quotes` option to `"double"`.`
-    warning: The `flake8-quotes.docstring-quotes="single"` option is incompatible with the formatter. We recommend disabling `Q002` when using the formatter, which enforces double quotes for docstrings. Alternatively, set the `flake8-quotes.docstring-quotes` option to `"double"`.`
+    warning: The following rule may cause conflicts when used with the formatter: `missing-trailing-comma` (`COM812`). To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
+    warning: The `format.indent-style="tab"` option is incompatible with `tab-indentation` (`W191`), which lints against all uses of tabs. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
+    warning: The `lint.flake8-implicit-str-concat.allow-multiline = false` option is incompatible with the formatter unless `single-line-implicit-string-concatenation` (`ISC001`) is enabled. We recommend enabling `single-line-implicit-string-concatenation` (`ISC001`) or setting `allow-multiline=true`.
+    warning: The `format.indent-style="tab"` option is incompatible with `docstring-tab-indentation` (`D206`), with requires space-based indentation. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
+    warning: The `flake8-quotes.inline-quotes="single"` option is incompatible with the formatter's `format.quote-style="double"`. We recommend disabling `bad-quotes-inline-string` (`Q000`) and `avoidable-escaped-quote` (`Q003`) when using the formatter, which enforces a consistent quote style. Alternatively, set both options to either `"single"` or `"double"`.
+    warning: The `flake8-quotes.multiline-quotes="single"` option is incompatible with the formatter. We recommend disabling `bad-quotes-multiline-string` (`Q001`) when using the formatter, which enforces double quotes for multiline strings. Alternatively, set the `flake8-quotes.multiline-quotes` option to `"double"`.`
+    warning: The `flake8-quotes.docstring-quotes="single"` option is incompatible with the formatter. We recommend disabling `bad-quotes-docstring` (`Q002`) when using the formatter, which enforces double quotes for docstrings. Alternatively, set the `flake8-quotes.docstring-quotes` option to `"double"`.`
     warning: The isort option `isort.lines-after-imports` with a value other than `-1`, `1` or `2` is incompatible with the formatter. To avoid unexpected behavior, we recommend setting the option to one of: `2`, `1`, or `-1` (default).
     warning: The isort option `isort.lines-between-types` with a value greater than 1 is incompatible with the formatter. To avoid unexpected behavior, we recommend setting the option to one of: `1` or `0` (default).
     warning: The isort option `isort.force-wrap-aliases` is incompatible with the formatter `format.skip-magic-trailing-comma=true` option. To avoid unexpected behavior, we recommend either setting `isort.force-wrap-aliases=false` or `format.skip-magic-trailing-comma=false`.
@@ -1176,12 +1289,12 @@ def say_hy(name: str):
     	print(f"Hy {name}")
 
     ----- stderr -----
-    warning: The following rule may cause conflicts when used with the formatter: `COM812`. To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
-    warning: The `format.indent-style="tab"` option is incompatible with `W191`, which lints against all uses of tabs. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
-    warning: The `format.indent-style="tab"` option is incompatible with `D206`, with requires space-based indentation. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
-    warning: The `flake8-quotes.inline-quotes="single"` option is incompatible with the formatter's `format.quote-style="double"`. We recommend disabling `Q000` and `Q003` when using the formatter, which enforces a consistent quote style. Alternatively, set both options to either `"single"` or `"double"`.
-    warning: The `flake8-quotes.multiline-quotes="single"` option is incompatible with the formatter. We recommend disabling `Q001` when using the formatter, which enforces double quotes for multiline strings. Alternatively, set the `flake8-quotes.multiline-quotes` option to `"double"`.`
-    warning: The `flake8-quotes.docstring-quotes="single"` option is incompatible with the formatter. We recommend disabling `Q002` when using the formatter, which enforces double quotes for docstrings. Alternatively, set the `flake8-quotes.docstring-quotes` option to `"double"`.`
+    warning: The following rule may cause conflicts when used with the formatter: `missing-trailing-comma` (`COM812`). To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
+    warning: The `format.indent-style="tab"` option is incompatible with `tab-indentation` (`W191`), which lints against all uses of tabs. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
+    warning: The `format.indent-style="tab"` option is incompatible with `docstring-tab-indentation` (`D206`), with requires space-based indentation. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `"space"`.
+    warning: The `flake8-quotes.inline-quotes="single"` option is incompatible with the formatter's `format.quote-style="double"`. We recommend disabling `bad-quotes-inline-string` (`Q000`) and `avoidable-escaped-quote` (`Q003`) when using the formatter, which enforces a consistent quote style. Alternatively, set both options to either `"single"` or `"double"`.
+    warning: The `flake8-quotes.multiline-quotes="single"` option is incompatible with the formatter. We recommend disabling `bad-quotes-multiline-string` (`Q001`) when using the formatter, which enforces double quotes for multiline strings. Alternatively, set the `flake8-quotes.multiline-quotes` option to `"double"`.`
+    warning: The `flake8-quotes.docstring-quotes="single"` option is incompatible with the formatter. We recommend disabling `bad-quotes-docstring` (`Q002`) when using the formatter, which enforces double quotes for docstrings. Alternatively, set the `flake8-quotes.docstring-quotes` option to `"double"`.`
     warning: The isort option `isort.lines-after-imports` with a value other than `-1`, `1` or `2` is incompatible with the formatter. To avoid unexpected behavior, we recommend setting the option to one of: `2`, `1`, or `-1` (default).
     warning: The isort option `isort.lines-between-types` with a value greater than 1 is incompatible with the formatter. To avoid unexpected behavior, we recommend setting the option to one of: `1` or `0` (default).
     warning: The isort option `isort.force-wrap-aliases` is incompatible with the formatter `format.skip-magic-trailing-comma=true` option. To avoid unexpected behavior, we recommend either setting `isort.force-wrap-aliases=false` or `format.skip-magic-trailing-comma=false`.
@@ -1307,9 +1420,9 @@ def say_hy(name: str):
     1 file reformatted
 
     ----- stderr -----
-    warning: `incorrect-blank-line-before-class` (D203) and `no-blank-line-before-class` (D211) are incompatible. Ignoring `incorrect-blank-line-before-class`.
-    warning: `multi-line-summary-first-line` (D212) and `multi-line-summary-second-line` (D213) are incompatible. Ignoring `multi-line-summary-second-line`.
-    warning: The following rule may cause conflicts when used with the formatter: `COM812`. To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
+    warning: `incorrect-blank-line-before-class-docstring` (D203) and `blank-line-before-class-docstring` (D211) are incompatible. Ignoring `incorrect-blank-line-before-class-docstring`.
+    warning: `multiline-docstring-summary-on-separate-line` (D212) and `multiline-docstring-summary-on-first-line` (D213) are incompatible. Ignoring `multiline-docstring-summary-on-first-line`.
+    warning: The following rule may cause conflicts when used with the formatter: `missing-trailing-comma` (`COM812`). To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
     ");
     Ok(())
 }
@@ -1881,9 +1994,8 @@ fn test_notebook_trailing_semicolon() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn syntax_error_in_notebooks() -> Result<()> {
-    let test = CliTest::with_files([
+fn notebook_with_syntax_error() -> Result<CliTest> {
+    CliTest::with_files([
         (
             "ruff.toml",
             r#"
@@ -1941,7 +2053,12 @@ include = ["*.ipy"]
    }
 "#,
         ),
-    ])?;
+    ])
+}
+
+#[test]
+fn syntax_error_in_notebooks() -> Result<()> {
+    let test = notebook_with_syntax_error()?;
 
     assert_cmd_snapshot!(test.format_command()
         .args(["--config", "ruff.toml"])
@@ -1954,6 +2071,35 @@ include = ["*.ipy"]
     ----- stderr -----
     error: Failed to parse main.ipy:2:3:24: Expected an expression
     ");
+    Ok(())
+}
+
+#[test]
+fn syntax_error_in_notebooks_check() -> Result<()> {
+    let test = notebook_with_syntax_error()?;
+
+    assert_cmd_snapshot!(
+        test.format_command()
+            .args(["--config", "ruff.toml"])
+            .args(["--extension", "ipy:ipynb"])
+            .arg("--check")
+            .arg("."),
+        @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+    invalid-syntax: Expected an expression
+     --> main.ipy:cell 2:3:24
+      |
+    1 | for i in range(iterations):
+    2 |     # выберите случайный индекс в диапазон от 0 до len(X)-1 включительно при помощи функции random.randint
+    3 |     j = # ваш код здесь
+      |                        ^
+
+
+    ----- stderr -----
+    "
+    );
     Ok(())
 }
 
@@ -2358,6 +2504,278 @@ fn range_formatting_notebook() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn inline_script_configuration() -> Result<()> {
+    let test = CliTest::with_file(
+        "script.py",
+        r#"
+            # /// script
+            # tool.ruff.format.quote-style = 'single'
+            # ///
+            x = "hello"
+        "#,
+    )?;
+
+    assert_cmd_snapshot!(test.format_command().args(["--no-preview", "script.py"]), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    1 file reformatted
+
+    ----- stderr -----
+    ");
+
+    assert_cmd_snapshot!(test.format_command().args(["--preview", "--diff", "script.py"]), @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    --- script.py
+    +++ script.py
+    @@ -1,4 +1,4 @@
+     # /// script
+     # tool.ruff.format.quote-style = 'single'
+     # ///
+    -x = "hello"
+    +x = 'hello'
+
+
+    ----- stderr -----
+    1 file would be reformatted
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn formatting_activates_script_settings() -> Result<()> {
+    let test = CliTest::with_file(
+        "script.py",
+        r#"
+            #/// script
+            # tool.ruff.format.quote-style = "single"
+            # ///
+            x = "hello"
+        "#,
+    )?;
+    let args = ["format", "--preview", "--quiet", "script.py"];
+
+    assert_cmd_snapshot!(test.command().args(args), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+    assert_cmd_snapshot!(test.command().args(args).arg("--check"), @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    unformatted: File would be reformatted
+     --> script.py:4:5
+      |
+    3 | # ///
+      - x = "hello"
+    4 + x = 'hello'
+      |
+
+
+    ----- stderr -----
+    "#);
+    Ok(())
+}
+
+#[test]
+fn inline_script_conflicts() -> Result<()> {
+    let test = CliTest::with_files([
+        (
+            "comma.py",
+            r#"
+                # /// script
+                # tool.ruff.lint.select = ['COM812']
+                # ///
+                pass
+            "#,
+        ),
+        (
+            "docstring.py",
+            r#"
+                # /// script
+                # tool.ruff.lint.select = ['D203']
+                # ///
+                pass
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(test.format_command()
+        .env("RAYON_NUM_THREADS", "1")
+        .args(["--preview", "comma.py", "docstring.py"]), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    2 files reformatted
+
+    ----- stderr -----
+    warning: The following rule may cause conflicts when used with the formatter: `missing-trailing-comma` (`COM812`). To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
+    warning: The following rule may cause conflicts when used with the formatter: `incorrect-blank-line-before-class-docstring` (`D203`). To avoid unexpected behavior, we recommend disabling this rule, either by removing it from the `lint.select` or `lint.extend-select` configuration, or adding it to the `lint.ignore` configuration.
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn stdin_inline_script_conflict() -> Result<()> {
+    let test = CliTest::new()?;
+
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--preview", "--stdin-filename=script.py", "-"])
+        .pass_stdin(indoc! {r#"
+            # /// script
+            # tool.ruff.lint.select = ['Q000']
+            # tool.ruff.format.quote-style = 'single'
+            # ///
+            x = "hello"
+        "#}), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    # /// script
+    # tool.ruff.lint.select = ['Q000']
+    # tool.ruff.format.quote-style = 'single'
+    # ///
+    x = 'hello'
+
+    ----- stderr -----
+    warning: The `flake8-quotes.inline-quotes="double"` option is incompatible with the formatter's `format.quote-style="single"`. We recommend disabling `bad-quotes-inline-string` (`Q000`) and `avoidable-escaped-quote` (`Q003`) when using the formatter, which enforces a consistent quote style. Alternatively, set both options to either `"single"` or `"double"`.
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn stdin_script_python_version() -> Result<()> {
+    let test = CliTest::with_file(
+        "ruff.toml",
+        r#"
+            preview = true
+            target-version = 'py38'
+        "#,
+    )?;
+    let script = indoc! {r#"
+        # /// script
+        # requires-python = '>=3.10'
+        # ///
+        with open('a_really_long_foo') as foo, open('a_really_long_bar') as bar, open('a_really_long_baz') as baz:
+            pass
+    "#};
+
+    assert_cmd_snapshot!(test.format_command().args(["--stdin-filename=script.py", "-"]).pass_stdin(script), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    # /// script
+    # requires-python = '>=3.10'
+    # ///
+    with (
+        open("a_really_long_foo") as foo,
+        open("a_really_long_bar") as bar,
+        open("a_really_long_baz") as baz,
+    ):
+        pass
+
+    ----- stderr -----
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn invalid_script_metadata_check() -> Result<()> {
+    let test = CliTest::with_file(
+        "script.py",
+        r#"
+            # /// script
+            # requires-python = 42
+            # ///
+        "#,
+    )?;
+
+    assert_cmd_snapshot!(test.format_command().args(["--preview", "--check", "script.py"]), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+    invalid-script-metadata: invalid type: integer `42`, expected a string
+     --> script.py:3:21
+      |
+    2 | # /// script
+    3 | # requires-python = 42
+      |                     ^^
+    4 | # ///
+      |
+
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn invalid_inline_setting_location() -> Result<()> {
+    let test = CliTest::with_file(
+        "bad.py",
+        r#"
+            # /// script
+            # tool.ruff.format.quote-style = "custom"
+            # ///
+        "#,
+    )?;
+
+    assert_cmd_snapshot!(test.format_command().args(["--preview", "."]), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse script metadata in bad.py:3:34: unknown variant `custom`, expected one of `single`, `double`, `preserve`
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn stdin_invalid_script_metadata() -> Result<()> {
+    let test = CliTest::new()?;
+
+    let script = indoc! {r#"
+        # /// script
+        # requires-python = 42
+        # ///
+    "#};
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--preview", "--stdin-filename=script.py", "-"])
+        .pass_stdin(script), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse script metadata in script.py:2:21: invalid type: integer `42`, expected a string
+    ");
+
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--preview", "--silent", "--stdin-filename=script.py", "-"])
+        .pass_stdin(script), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// Test that the formatter respects `per-file-target-version`. Context managers can't be
 /// parenthesized like this before Python 3.10.
 ///
@@ -2441,57 +2859,19 @@ fn cookiecutter_globbing() -> Result<()> {
 }
 
 #[test]
-fn stable_output_format_warning() -> Result<()> {
-    let test = CliTest::new()?;
-    assert_cmd_snapshot!(
-        test.format_command()
-            .args(["--output-format=full", "-"])
-            .pass_stdin(""),
-        @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-    ----- stderr -----
-    warning: The --output-format flag for the formatter is unstable and requires preview mode to use.
-    ",
-    );
-    Ok(())
-}
-
-#[test]
-fn markdown_formatting_preview_disabled() -> Result<()> {
+fn markdown_formatting() -> Result<()> {
     let test = CliTest::new()?;
     let unformatted = test.fixture_path("unformatted.md");
 
     assert_cmd_snapshot!(test.format_command()
-        .args(["--isolated", "--no-preview", "--diff"])
-        .arg(unformatted),
-        @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
-    ----- stderr -----
-    error: Failed to format CRATE_ROOT/resources/test/fixtures/unformatted.md: Markdown formatting is experimental, enable preview mode.
-    ");
-    Ok(())
-}
-
-#[test]
-fn markdown_formatting_preview_enabled() -> Result<()> {
-    let test = CliTest::new()?;
-    let unformatted = test.fixture_path("unformatted.md");
-
-    assert_cmd_snapshot!(test.format_command()
-        .args(["--isolated", "--preview", "--check"])
+        .args(["--isolated", "--check"])
         .arg(unformatted),
         @r#"
     success: false
     exit_code: 1
     ----- stdout -----
     unformatted: File would be reformatted
-      --> CRATE_ROOT/resources/test/fixtures/unformatted.md:1:1
+      --> CRATE_ROOT/resources/test/fixtures/unformatted.md:4:7
        |
     3  | ```py
        - print( "hello" )
@@ -2526,7 +2906,7 @@ fn markdown_formatting_stdin() -> Result<()> {
     let unformatted = fs::read(test.fixture_path("unformatted.md")).unwrap();
 
     assert_cmd_snapshot!(test.format_command()
-        .args(["--isolated", "--preview", "--stdin-filename", "unformatted.md"])
+        .args(["--isolated", "--stdin-filename", "unformatted.md"])
         .arg("-")
         .pass_stdin(unformatted), @r#"
     success: true
@@ -2569,7 +2949,7 @@ print( 'hello' )
     ])?;
 
     assert_cmd_snapshot!(
-        test.format_command().args(["--preview", "--diff", "test.qmd"]),
+        test.format_command().args(["--diff", "test.qmd"]),
         @r#"
     success: false
     exit_code: 1
@@ -2622,16 +3002,13 @@ print( 'hello' )
 
     assert_cmd_snapshot!(
             test.format_command()
-                .args(["format", "--preview", "--check", "."]),
+                .args(["--check", "."]),
             @r#"
     success: false
-    exit_code: 2
+    exit_code: 1
     ----- stdout -----
-    io: [TMP]/format: No such file or directory (os error 2)
-    --> format:1:1
-
     unformatted: File would be reformatted
-     --> test.bar:1:1
+     --> test.bar:5:7
       |
     4 | ```py
       - print( 'hello' )

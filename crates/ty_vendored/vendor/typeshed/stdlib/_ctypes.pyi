@@ -126,7 +126,10 @@ class _PyCSimpleType(_CTypeBaseType):
         def __rmul__(self: type[_CT], value: int, /) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class _SimpleCData(_CData, Generic[_T], metaclass=_PyCSimpleType):
-    """XXX to be provided"""
+    """This non-public class is the base class of all fundamental ctypes data types.
+    It contains the common attributes of the fundamental ctypes data types.
+    _SimpleCData is a subclass of _CData, so it inherits their methods and attributes.
+    """
 
     value: _T
     """current value"""
@@ -157,7 +160,12 @@ class _PyCPointerType(_CTypeBaseType):
         def __rmul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class _Pointer(_PointerLike, _CData, Generic[_CT], metaclass=_PyCPointerType):
-    """XXX to be provided"""
+    """Private, abstract base class for pointers.
+
+    Concrete pointer types are created by calling POINTER() with the type that will be pointed to; this is done automatically by pointer().
+
+    If a pointer points to an array, its elements can be read and written using standard subscript and slice accesses. Pointer objects have no size, so len() will raise TypeError. Negative subscripts will read from the memory before the pointer (as in C), and out-of-range subscripts will probably crash with an access violation (if you’re lucky).
+    """
 
     _type_: type[_CT]
     contents: _CT
@@ -337,7 +345,7 @@ class _UnionType(_CTypeBaseType):
     # At runtime, various attributes are created on a Union subclass based
     # on its _fields_. This method doesn't exist, but represents those
     # dynamically created attributes.
-    def __getattr__(self, name: str) -> _CField[Any, Any, Any]: ...
+    def __getattr__(self, name: str, /) -> _CField[Any, Any, Any]: ...
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
@@ -353,8 +361,8 @@ class Union(_CData, metaclass=_UnionType):
         _align_: ClassVar[int]
 
     def __init__(self, *args: Any, **kw: Any) -> None: ...
-    def __getattr__(self, name: str) -> Any: ...
-    def __setattr__(self, name: str, value: Any) -> None: ...
+    def __getattr__(self, name: str, /) -> Any: ...
+    def __setattr__(self, name: str, value: Any, /) -> None: ...
 
 # This class is not exposed. It calls itself _ctypes.PyCStructType.
 @type_check_only
@@ -367,7 +375,7 @@ class _PyCStructType(_CTypeBaseType):
     # At runtime, various attributes are created on a Structure subclass based
     # on its _fields_. This method doesn't exist, but represents those
     # dynamically created attributes.
-    def __getattr__(self, name: str) -> _CField[Any, Any, Any]: ...
+    def __getattr__(self, name: str, /) -> _CField[Any, Any, Any]: ...
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
@@ -387,7 +395,7 @@ class Structure(_CData, metaclass=_PyCStructType):
         _layout_: ClassVar[Literal["ms", "gcc-sysv"]]
 
     def __init__(self, *args: Any, **kw: Any) -> None: ...
-    def __getattr__(self, name: str) -> Any: ...
+    def __getattr__(self, name: str, /) -> Any: ...
     def __setattr__(self, name: str, value: Any) -> None: ...
 
 # This class is not exposed. It calls itself _ctypes.PyCArrayType.
@@ -492,3 +500,9 @@ def buffer_info(o: _CData | _CDataType | type[_CData | _CDataType], /) -> tuple[
 
 def call_cdeclfunction(address: int, arguments: tuple[Any, ...], /) -> Any: ...
 def call_function(address: int, arguments: tuple[Any, ...], /) -> Any: ...
+
+# dllist() is available on Linux and other platforms like NetBSD
+if sys.version_info >= (3, 14) and sys.platform != "win32" and sys.platform != "darwin":
+    # Added in Python 3.14.7
+    def dllist() -> list[str]:
+        """dllist() return a list of loaded shared libraries"""

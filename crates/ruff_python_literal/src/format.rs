@@ -5,12 +5,6 @@ use std::str::FromStr;
 
 use crate::Case;
 
-trait FormatParse {
-    fn parse(text: &str) -> (Option<Self>, &str)
-    where
-        Self: Sized;
-}
-
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum FormatConversion {
     Str,
@@ -19,7 +13,7 @@ pub enum FormatConversion {
     Bytes,
 }
 
-impl FormatParse for FormatConversion {
+impl FormatConversion {
     fn parse(text: &str) -> (Option<Self>, &str) {
         let Some(conversion) = Self::from_string(text) else {
             return (None, text);
@@ -32,7 +26,7 @@ impl FormatParse for FormatConversion {
 }
 
 impl FormatConversion {
-    pub fn from_char(c: char) -> Option<FormatConversion> {
+    fn from_char(c: char) -> Option<FormatConversion> {
         match c {
             's' => Some(FormatConversion::Str),
             'r' => Some(FormatConversion::Repr),
@@ -72,7 +66,7 @@ impl FormatAlign {
     }
 }
 
-impl FormatParse for FormatAlign {
+impl FormatAlign {
     fn parse(text: &str) -> (Option<Self>, &str) {
         let mut chars = text.chars();
         if let Some(maybe_align) = chars.next().and_then(Self::from_char) {
@@ -90,15 +84,16 @@ pub enum FormatSign {
     MinusOrSpace,
 }
 
-impl FormatParse for FormatSign {
+impl FormatSign {
     fn parse(text: &str) -> (Option<Self>, &str) {
         let mut chars = text.chars();
-        match chars.next() {
-            Some('-') => (Some(Self::Minus), chars.as_str()),
-            Some('+') => (Some(Self::Plus), chars.as_str()),
-            Some(' ') => (Some(Self::MinusOrSpace), chars.as_str()),
-            _ => (None, text),
-        }
+        let kind = match chars.next() {
+            Some('-') => Self::Minus,
+            Some('+') => Self::Plus,
+            Some(' ') => Self::MinusOrSpace,
+            Some(_) | None => return (None, text),
+        };
+        (Some(kind), chars.as_str())
     }
 }
 
@@ -108,13 +103,13 @@ pub enum FormatGrouping {
     Underscore,
 }
 
-impl FormatParse for FormatGrouping {
+impl FormatGrouping {
     fn parse(text: &str) -> (Option<Self>, &str) {
         let mut chars = text.chars();
         match chars.next() {
             Some('_') => (Some(Self::Underscore), chars.as_str()),
             Some(',') => (Some(Self::Comma), chars.as_str()),
-            _ => (None, text),
+            Some(_) | None => (None, text),
         }
     }
 }
@@ -157,29 +152,40 @@ impl From<&FormatType> for char {
     }
 }
 
-impl FormatParse for FormatType {
-    fn parse(text: &str) -> (Option<Self>, &str) {
+impl FormatType {
+    /// Attempt to parse the [conversion type] of the f-string.
+    ///
+    /// A conversion type is optional in an f-string.
+    /// If it is present, it is always the last character of the format specifier.
+    ///
+    /// If a valid conversion type was encountered, this function returns `Ok((Some(FormatType), remaining_text))`.
+    /// If an invalid conversion type was encountered, this function returns `Err(invalid_char)`.
+    /// If no conversion type was encountered, this function returns `Ok((None, remaining_text))`.
+    ///
+    /// [conversion type]: https://docs.python.org/3/library/string.html#format-specification-mini-language
+    fn parse(text: &str) -> Result<(Option<Self>, &str), char> {
         let mut chars = text.chars();
-        match chars.next() {
-            Some('s') => (Some(Self::String), chars.as_str()),
-            Some('b') => (Some(Self::Binary), chars.as_str()),
-            Some('c') => (Some(Self::Character), chars.as_str()),
-            Some('d') => (Some(Self::Decimal), chars.as_str()),
-            Some('o') => (Some(Self::Octal), chars.as_str()),
-            Some('n') => (Some(Self::Number(Case::Lower)), chars.as_str()),
-            Some('N') => (Some(Self::Number(Case::Upper)), chars.as_str()),
-            Some('x') => (Some(Self::Hex(Case::Lower)), chars.as_str()),
-            Some('X') => (Some(Self::Hex(Case::Upper)), chars.as_str()),
-            Some('e') => (Some(Self::Exponent(Case::Lower)), chars.as_str()),
-            Some('E') => (Some(Self::Exponent(Case::Upper)), chars.as_str()),
-            Some('f') => (Some(Self::FixedPoint(Case::Lower)), chars.as_str()),
-            Some('F') => (Some(Self::FixedPoint(Case::Upper)), chars.as_str()),
-            Some('g') => (Some(Self::GeneralFormat(Case::Lower)), chars.as_str()),
-            Some('G') => (Some(Self::GeneralFormat(Case::Upper)), chars.as_str()),
-            Some('%') => (Some(Self::Percentage), chars.as_str()),
-            Some(_) => (None, chars.as_str()),
-            _ => (None, text),
-        }
+        let kind = match chars.next() {
+            Some('s') => Self::String,
+            Some('b') => Self::Binary,
+            Some('c') => Self::Character,
+            Some('d') => Self::Decimal,
+            Some('o') => Self::Octal,
+            Some('n') => Self::Number(Case::Lower),
+            Some('N') => Self::Number(Case::Upper),
+            Some('x') => Self::Hex(Case::Lower),
+            Some('X') => Self::Hex(Case::Upper),
+            Some('e') => Self::Exponent(Case::Lower),
+            Some('E') => Self::Exponent(Case::Upper),
+            Some('f') => Self::FixedPoint(Case::Lower),
+            Some('F') => Self::FixedPoint(Case::Upper),
+            Some('g') => Self::GeneralFormat(Case::Lower),
+            Some('G') => Self::GeneralFormat(Case::Upper),
+            Some('%') => Self::Percentage,
+            Some(invalid) => return Err(invalid),
+            None => return Ok((None, text)),
+        };
+        Ok((Some(kind), chars.as_str()))
     }
 }
 
@@ -297,7 +303,7 @@ fn parse_alternate_form(text: &str) -> (bool, &str) {
     let mut chars = text.chars();
     match chars.next() {
         Some('#') => (true, chars.as_str()),
-        _ => (false, text),
+        Some(_) | None => (false, text),
     }
 }
 
@@ -323,7 +329,7 @@ fn parse_precision(text: &str) -> Result<(Option<usize>, &str), FormatSpecError>
                 (None, text)
             }
         }
-        _ => (None, text),
+        Some(_) | None => (None, text),
     })
 }
 
@@ -368,20 +374,13 @@ impl FormatSpec {
         let (grouping_option, text) = FormatGrouping::parse(text);
         let (precision, text) = parse_precision(text)?;
 
-        let (format_type, _text) = if text.is_empty() {
-            (None, text)
-        } else {
-            // If there's any remaining text, we should yield a valid format type and consume it
-            // all.
-            let (format_type, text) = FormatType::parse(text);
-            if format_type.is_none() {
-                return Err(FormatSpecError::InvalidFormatType);
-            }
-            if !text.is_empty() {
-                return Err(FormatSpecError::InvalidFormatSpecifier);
-            }
-            (format_type, text)
-        };
+        // If there's any remaining text, we should yield a valid format type and consume it
+        // all.
+        let (format_type, text) =
+            FormatType::parse(text).map_err(FormatSpecError::InvalidFormatType)?;
+        if !text.is_empty() {
+            return Err(FormatSpecError::InvalidFormatSpecifier);
+        }
 
         if zero && fill.is_none() {
             fill.replace('0');
@@ -407,7 +406,7 @@ pub enum FormatSpecError {
     DecimalDigitsTooMany,
     PrecisionTooBig,
     InvalidFormatSpecifier,
-    InvalidFormatType,
+    InvalidFormatType(char),
     InvalidPlaceholder(FormatParseError),
     PlaceholderRecursionExceeded,
     UnspecifiedFormat(char, char),
@@ -502,7 +501,7 @@ impl FieldNamePart {
                         if ch == ']' {
                             return if index.is_empty() {
                                 Err(FormatParseError::EmptyAttribute)
-                            } else if let Ok(index) = index.parse::<usize>() {
+                            } else if let Some(index) = parse_index(&index) {
                                 Ok(FieldNamePart::Index(index))
                             } else {
                                 Ok(FieldNamePart::StringIndex(index))
@@ -541,7 +540,7 @@ impl FieldName {
 
         let field_type = if first.is_empty() {
             FieldType::Auto
-        } else if let Ok(index) = first.parse::<usize>() {
+        } else if let Some(index) = parse_index(&first) {
             FieldType::Index(index)
         } else {
             FieldType::Keyword(first)
@@ -735,6 +734,18 @@ impl<'a> FromTemplate<'a> for FormatString {
     fn from_raw_str(text: &'a str) -> Result<Self, Self::Err> {
         FormatString::parse(text, true)
     }
+}
+
+/// Python only treats an all-digit field name or element index as an integer, so `"{+0}"` is the
+/// keyword `+0`, not index 0. `usize::from_str` accepts a leading `+`, hence the explicit check.
+///
+/// See the `arg_name` and `element_index` productions in the
+/// [format string syntax](https://docs.python.org/3/library/string.html#format-string-syntax).
+fn parse_index(text: &str) -> Option<usize> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
 }
 
 #[cfg(test)]
@@ -969,7 +980,7 @@ mod tests {
         );
         assert_eq!(
             FormatSpec::parse("}"),
-            Err(FormatSpecError::InvalidFormatType)
+            Err(FormatSpecError::InvalidFormatType('}'))
         );
         assert_eq!(
             FormatSpec::parse("{}}"),
@@ -995,7 +1006,7 @@ mod tests {
         );
         assert_eq!(
             FormatSpec::parse("z"),
-            Err(FormatSpecError::InvalidFormatType)
+            Err(FormatSpecError::InvalidFormatType('z'))
         );
     }
 
@@ -1030,6 +1041,23 @@ mod tests {
                     FieldNamePart::Attribute("attr".to_owned()),
                     FieldNamePart::Index(0),
                     FieldNamePart::StringIndex("string".to_owned())
+                ],
+            })
+        );
+        assert_eq!(
+            FieldName::parse("+0"),
+            Ok(FieldName {
+                field_type: FieldType::Keyword("+0".to_owned()),
+                parts: Vec::new(),
+            })
+        );
+        assert_eq!(
+            FieldName::parse("0[+1][-1]"),
+            Ok(FieldName {
+                field_type: FieldType::Index(0),
+                parts: vec![
+                    FieldNamePart::StringIndex("+1".to_owned()),
+                    FieldNamePart::StringIndex("-1".to_owned()),
                 ],
             })
         );

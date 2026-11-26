@@ -18,7 +18,9 @@ mod type_hierarchy;
 use self::traits::{NotificationHandler, RequestHandler};
 use super::{Result, schedule::BackgroundSchedule};
 use crate::session::client::Client;
-pub(crate) use diagnostics::publish_settings_diagnostics;
+pub(crate) use diagnostics::{
+    publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
+};
 use ruff_db::panic::PanicError;
 
 /// Processes a request from the client to the server.
@@ -52,6 +54,11 @@ pub(super) fn request(req: server::Request) -> Task {
         ),
         requests::GotoDeclarationRequestHandler::METHOD => background_document_request_task::<
             requests::GotoDeclarationRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
+        requests::GotoImplementationRequestHandler::METHOD => background_document_request_task::<
+            requests::GotoImplementationRequestHandler,
         >(
             req, BackgroundSchedule::Worker
         ),
@@ -108,6 +115,9 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::WillRenameFilesHandler::METHOD => background_request_task::<
+            requests::WillRenameFilesHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(
@@ -251,14 +261,16 @@ where
     <<R as RequestHandler>::RequestType as Request>::Params: UnwindSafe,
 {
     let retry = R::RETRY_ON_CANCELLATION.then(|| req.clone());
-    let (id, params) = cast_request::<R>(req)?;
+    let (id, mut params) = cast_request::<R>(req)?;
 
-    Ok(Task::background(schedule, move |session: &Session| {
+    let build = move |session: &Session| -> Box<dyn FnOnce(&Client) + Send> {
         let cancellation_token = session
             .request_queue()
             .incoming()
             .cancellation_token(&id)
             .expect("request should have been tested for cancellation before scheduling");
+
+        R::prepare_params(session, &mut params);
 
         // SAFETY: The `snapshot` is safe to move across the unwind boundary because it is not used
         // after unwinding.
@@ -288,7 +300,12 @@ where
                 panic_response::<R>(&id, client, &error, retry, log_guidance);
             }
         })
-    }))
+    };
+    Ok(Task::background(
+        schedule,
+        Some(R::salsa_cancellation_error),
+        build,
+    ))
 }
 
 fn background_document_request_task<R: traits::BackgroundDocumentRequestHandler>(
@@ -301,7 +318,7 @@ where
     let retry = R::RETRY_ON_CANCELLATION.then(|| req.clone());
     let (id, params) = cast_request::<R>(req)?;
 
-    Ok(Task::background(schedule, move |session: &Session| {
+    let build = move |session: &Session| -> Box<dyn FnOnce(&Client) + Send> {
         let cancellation_token = session
             .request_queue()
             .incoming()
@@ -310,8 +327,8 @@ where
 
         let uri = R::document_uri(&params);
 
-        let Ok(document) = session.snapshot_document(&uri) else {
-            let reason = format!("Document {uri} is not open in the session");
+        let Ok(snapshot) = session.snapshot_document(&uri) else {
+            let reason = format!("Document {uri} is neither open nor a supported closed file");
             tracing::warn!(
                 "Ignoring request id={id} method={} because {reason}",
                 R::METHOD
@@ -329,9 +346,9 @@ where
             });
         };
 
-        let path = document.notebook_or_file_path();
+        let path = snapshot.document().notebook_or_file_path();
         let db = session.project_db(path).clone();
-        let log_guidance = document.client_name().log_guidance();
+        let log_guidance = snapshot.client_name().log_guidance();
 
         Box::new(move |client| {
             let _span = tracing::debug_span!("request", %id, method = %R::METHOD).entered();
@@ -351,13 +368,18 @@ where
 
             if let Err(error) = ruff_db::panic::catch_unwind(|| {
                 salsa::attach(&db, || {
-                    R::handle_request(&id, &db, document, client, params);
+                    R::handle_request(&id, &db, snapshot, client, params);
                 });
             }) {
                 panic_response::<R>(&id, client, &error, retry, log_guidance);
             }
         })
-    }))
+    };
+    Ok(Task::background(
+        schedule,
+        Some(R::salsa_cancellation_error),
+        build,
+    ))
 }
 
 fn panic_response<R>(
@@ -432,9 +454,15 @@ where
     <<N as NotificationHandler>::NotificationType as Notification>::Params: UnwindSafe,
 {
     let (id, params) = cast_notification::<N>(req)?;
-    Ok(Task::background(schedule, move |session: &Session| {
+    let build = move |session: &Session| -> Box<dyn FnOnce(&Client) + Send> {
         let uri = N::document_uri(&params);
-        let Ok(snapshot) = session.snapshot_document(&uri) else {
+        // Requiring an open document here assumes the notification is invalid for closed documents.
+        // TODO: Revisit this check before routing a notification that can target closed documents through
+        // `background_notification_thread`. Note that `snapshot_document` can already resolve closed files.
+        let Ok(snapshot) = session
+            .open_document_handle(&uri)
+            .and_then(|_| session.snapshot_document(&uri))
+        else {
             let reason = format!("Document {uri} is not open in the session");
             tracing::warn!(
                 "Ignoring notification id={id} method={} because {reason}",
@@ -464,7 +492,8 @@ where
                 client.show_error_message(format!("ty encountered a problem. {log_guidance}"));
             }
         })
-    }))
+    };
+    Ok(Task::background(schedule, None, build))
 }
 
 /// Tries to cast a serialized request from the server into
@@ -488,8 +517,11 @@ where
                 anyhow::anyhow!("JSON parsing failure:\n{json_err}")
             }
             server::ExtractError::MethodMismatch(_) => {
-                unreachable!("A method mismatch should not be possible here unless you've used a different handler (`Req`) \
-                    than the one whose method name was matched against earlier.")
+                unreachable!(
+                    "A method mismatch should not be possible here \
+                    unless you've used a different handler (`Req`) \
+                    than the one whose method name was matched against earlier."
+                )
             }
         })
         .with_failure_code(server::ErrorCode::InvalidParams)
@@ -537,8 +569,11 @@ where
                     anyhow::anyhow!("JSON parsing failure:\n{json_err}")
                 }
                 server::ExtractError::MethodMismatch(_) => {
-                    unreachable!("A method mismatch should not be possible here unless you've used a different handler (`N`) \
-                        than the one whose method name was matched against earlier.")
+                    unreachable!(
+                        "A method mismatch should not be possible here \
+                        unless you've used a different handler (`N`) \
+                        than the one whose method name was matched against earlier."
+                    )
                 }
             })
             .with_failure_code(server::ErrorCode::InvalidParams)?,
@@ -562,7 +597,7 @@ impl<T, E: Into<anyhow::Error>> LSPResult<T> for core::result::Result<T, E> {
 }
 
 impl Error {
-    pub(crate) fn new(err: anyhow::Error, code: server::ErrorCode) -> Self {
+    fn new(err: anyhow::Error, code: server::ErrorCode) -> Self {
         Self { code, error: err }
     }
 }

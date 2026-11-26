@@ -6,15 +6,18 @@
 //! types, and documentation. It supports multiple signatures for union types
 //! and overloads.
 
-use crate::Db;
 use crate::docstring::Docstring;
-use crate::goto::docstring_for_call_definition;
-use ruff_db::files::File;
+use crate::goto::{docstring_for_call_definition, docstring_for_parameter_field};
+use crate::{Db, FxIndexMap, MarkupKind};
 use ruff_db::parsed::parsed_module;
+use ruff_db::source::source_text;
 use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{self as ast, AnyNodeRef};
+use ruff_python_trivia::PythonWhitespace;
+use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextSize};
+use ty_python_core::ProgramFile;
 use ty_python_semantic::SemanticModel;
 use ty_python_semantic::types::Type;
 use ty_python_semantic::types::ide_support::{
@@ -73,11 +76,15 @@ pub struct SignatureHelpInfo<'db> {
 }
 
 /// Signature help information for function calls at the given position
-pub fn signature_help(db: &dyn Db, file: File, offset: TextSize) -> Option<SignatureHelpInfo<'_>> {
-    let parsed = parsed_module(db, file).load(db);
+pub fn signature_help<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    offset: TextSize,
+) -> Option<SignatureHelpInfo<'db>> {
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
 
     // Get the call expression at the given position.
-    let (call_expr, current_arg_index) = get_call_expr(&parsed, offset)?;
+    let (call_expr, current_arg_index) = get_call_expr(db, &parsed, offset)?;
 
     let model = SemanticModel::new(db, file);
 
@@ -108,22 +115,30 @@ pub fn signature_help(db: &dyn Db, file: File, offset: TextSize) -> Option<Signa
 
 /// Returns the innermost call expression that contains the specified offset
 /// and the index of the argument that the offset maps to.
-fn get_call_expr(
-    parsed: &ruff_db::parsed::ParsedModuleRef,
+fn get_call_expr<'ast>(
+    db: &dyn Db,
+    parsed: &'ast ruff_db::parsed::ParsedModuleRef,
     offset: TextSize,
-) -> Option<(&ast::ExprCall, usize)> {
+) -> Option<(&'ast ast::ExprCall, usize)> {
     let root_node: AnyNodeRef = parsed.syntax().into();
+    let source = source_text(db, parsed.module().file());
+    let line_range = source.line_range(offset);
+    let line = &source[line_range];
+    let line_end = line_range.start() + TextSize::of(line.trim_whitespace_end());
+    let token_offset = offset.min(line_end);
 
     // Find the token under the cursor and use its offset to find the node
     let token = parsed
         .tokens()
-        .at_offset(offset)
+        .at_offset(token_offset)
         .max_by_key(|token| match token.kind() {
-            TokenKind::Name
+            TokenKind::Identifier
             | TokenKind::String
             | TokenKind::Complex
             | TokenKind::Float
             | TokenKind::Int => 1,
+            // Prefer the real token immediately before an empty recovery token at EOF.
+            TokenKind::Unknown => -1,
             _ => 0,
         })?;
 
@@ -140,7 +155,9 @@ fn get_call_expr(
             }
 
             // Close the signature help if the cursor is at the closing parenthesis
-            if token.kind() == TokenKind::Rpar && node.end() == token.end() && offset == token.end()
+            if token.kind() == TokenKind::Rpar
+                && node.end() == token.end()
+                && token_offset == token.end()
             {
                 return false;
             }
@@ -158,7 +175,7 @@ fn get_call_expr(
         return None;
     };
 
-    // Determine which argument corresponding to the current cursor location.
+    // Determine which argument corresponds to the current cursor location.
     let current_arg_index = get_argument_index(call_expr, offset);
 
     Some((call_expr, current_arg_index))
@@ -181,7 +198,7 @@ fn get_argument_index(call_expr: &ast::ExprCall, offset: TextSize) -> usize {
 
 /// Create signature details from `CallSignatureDetails`.
 fn create_signature_details_from_call_signature_details<'db>(
-    db: &dyn crate::Db,
+    db: &'db dyn Db,
     details: CallSignatureDetails<'db>,
     current_arg_index: usize,
 ) -> SignatureDetails<'db> {
@@ -217,7 +234,7 @@ fn create_signature_details_from_call_signature_details<'db>(
                 })
         };
 
-    let parameters = create_parameters(details.parameters, documentation.as_ref());
+    let parameters = create_parameters(db, details.parameters, documentation.as_ref());
     let active_parameter = active_parameter.filter(|&index| index < parameters.len());
     SignatureDetails {
         label: details.label,
@@ -229,6 +246,7 @@ fn create_signature_details_from_call_signature_details<'db>(
 
 /// Create `ParameterDetails` objects from semantic displayed parameter details.
 fn create_parameters<'db>(
+    db: &'db dyn Db,
     parameters: Vec<CallSignatureParameter<'db>>,
     docstring: Option<&Docstring>,
 ) -> Vec<ParameterDetails<'db>> {
@@ -236,13 +254,14 @@ fn create_parameters<'db>(
     let param_docs = if let Some(docstring) = docstring {
         docstring.parameter_documentation()
     } else {
-        indexmap::IndexMap::new()
+        FxIndexMap::default()
     };
 
     parameters
         .into_iter()
         .map(|parameter| {
             let CallSignatureParameter {
+                definition,
                 label,
                 name,
                 ty,
@@ -250,8 +269,10 @@ fn create_parameters<'db>(
                 is_variadic,
                 is_keyword_variadic,
             } = parameter;
-            // Get the parameter name for documentation lookup.
-            let documentation = param_docs.get(name.as_str()).cloned();
+            let documentation = param_docs.get(name.as_str()).cloned().or_else(|| {
+                docstring_for_parameter_field(db, definition)
+                    .map(|docstring| docstring.render(MarkupKind::PlainText))
+            });
 
             ParameterDetails {
                 name,
@@ -271,7 +292,6 @@ mod tests {
     use insta::assert_snapshot;
 
     use crate::MarkupKind;
-    use crate::docstring::Docstring;
     use crate::signature_help::SignatureHelpInfo;
     use crate::tests::{CursorTest, cursor_test};
 
@@ -317,7 +337,7 @@ mod tests {
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
 
@@ -372,6 +392,37 @@ mod tests {
         suffix: str
         ---------------------------------------------
         ");
+    }
+
+    #[test]
+    fn signature_help_paramspec_classmethod_docstring() {
+        let test = cursor_test(
+            r#"
+        from typing import Callable
+
+        class Factory:
+            def __init__(self, value: int) -> None:
+                """Constructor documentation."""
+
+            @classmethod
+            def make[**P](cls: Callable[P, "Factory"], *args: P.args, **kwargs: P.kwargs) -> "Factory":
+                """Factory method documentation."""
+                return cls(*args, **kwargs)
+
+        Factory.make(<CURSOR>)
+        "#,
+        );
+
+        let documentation = test
+            .signature_help()
+            .and_then(|result| result.signatures.into_iter().next())
+            .and_then(|signature| signature.documentation);
+        assert_eq!(
+            documentation
+                .as_ref()
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
+            Some("Factory method documentation.\n".to_string())
+        );
     }
 
     #[test]
@@ -612,6 +663,128 @@ def ab(a: str):
 
         -------------- active parameter -------------
         a: str
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_literal_list_after_keyword() {
+        let test = cursor_test(
+            r#"
+            def f(x: int, *, y: int): pass
+            f(x=1, *[2]<CURSOR>)
+            "#,
+        );
+
+        // `*[2]` still supplies the positional parameter `x`, even though `x=1` also supplies it.
+        // Highlight that binding despite the duplicate assignment.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int, *, y: int) -> Unknown
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_literal_dictionary_key_order() {
+        let test = cursor_test(
+            r#"
+            def f(x: int, *, y: int): pass
+            f(**{'y': 2, 'x': 1}<CURSOR>)
+            "#,
+        );
+
+        // Treat the unpacking as one source argument and highlight its first matched parameter.
+        // The first key is `y`, so `y` is active even though `x` appears first in the signature.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int, *, y: int) -> Unknown
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        y: int
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_overload_literal_list_arity() {
+        let test = cursor_test(
+            r#"
+            from typing import overload
+
+            @overload
+            def f(x: int) -> int: ...
+            @overload
+            def f(x: int, y: str) -> str: ...
+            def f(x: int, y: str = "") -> int | str: ...
+
+            f(*[1, "two"]<CURSOR>)
+            "#,
+        );
+
+        // The two list elements select the two-parameter overload. The unpacking is one source
+        // argument, so highlight its first matched parameter, `x`, in both signatures.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int, y: str) -> str
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+
+        =============== other signature =============
+        (x: int) -> int
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+        ");
+    }
+
+    #[test]
+    fn signature_help_overload_literal_dictionary_arity() {
+        let test = cursor_test(
+            r#"
+            from typing import overload
+
+            @overload
+            def f(*, x: int) -> int: ...
+            @overload
+            def f(*, x: int, y: str) -> str: ...
+            def f(*, x: int, y: str = "") -> int | str: ...
+
+            f(**{"x": 1, "y": "two"}<CURSOR>)
+            "#,
+        );
+
+        // The two known keys select the overload that accepts both `x` and `y`. Highlight `x` in
+        // both signatures because it is the first key supplied by this single unpacked argument.
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (*, x: int, y: str) -> str
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+
+        =============== other signature =============
+        (*, x: int) -> int
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
         ---------------------------------------------
         ");
     }
@@ -907,7 +1080,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
     }
@@ -975,7 +1148,12 @@ def ab(a: int, *, c: int):
         // the parameter type should be `str` (not `_KT`).
         let key_param = &signature.parameters[0];
         assert_eq!(key_param.name, "key");
-        let type_display = format!("{}", key_param.ty.display(&test.db));
+        let type_display = format!(
+            "{}",
+            key_param
+                .ty
+                .display(&test.db, &test.db.program_environment())
+        );
         assert_eq!(type_display, "str");
     }
 
@@ -996,7 +1174,12 @@ def ab(a: int, *, c: int):
         // list.append's parameter is typed as `_T`, which should resolve
         // to `int` for a `list[int]`.
         let object_param = &signature.parameters[0];
-        let type_display = format!("{}", object_param.ty.display(&test.db));
+        let type_display = format!(
+            "{}",
+            object_param
+                .ty
+                .display(&test.db, &test.db.program_environment())
+        );
         assert_eq!(type_display, "int");
     }
 
@@ -1023,12 +1206,18 @@ def ab(a: int, *, c: int):
         // `T` should be resolved to `str` from the first argument.
         let a_param = &signature.parameters[0];
         assert_eq!(a_param.name, "a");
-        let a_type = format!("{}", a_param.ty.display(&test.db));
+        let a_type = format!(
+            "{}",
+            a_param.ty.display(&test.db, &test.db.program_environment())
+        );
         assert_eq!(a_type, "str");
 
         let b_param = &signature.parameters[1];
         assert_eq!(b_param.name, "b");
-        let b_type = format!("{}", b_param.ty.display(&test.db));
+        let b_type = format!(
+            "{}",
+            b_param.ty.display(&test.db, &test.db.program_environment())
+        );
         assert_eq!(b_type, "str");
     }
 
@@ -1077,7 +1266,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             None
         );
     }
@@ -1188,6 +1377,33 @@ def ab(a: int, *, c: int):
     }
 
     #[test]
+    fn signature_help_named_tuple_field_documentation() {
+        let test = cursor_test(
+            r#"
+        from typing import NamedTuple
+
+        class Point(NamedTuple):
+            x: int
+            """Horizontal coordinate."""
+
+        Point(<CURSOR>1)
+        "#,
+        );
+
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: int) -> Point
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: int
+        ---------------------------------------------
+        Horizontal coordinate.
+        ");
+    }
+
+    #[test]
     fn signature_help_after_closing_paren() {
         let test = cursor_test(
             r#"
@@ -1233,6 +1449,55 @@ def ab(a: int, *, c: int):
         // Should be on the second parameter (b: str) since we're after the inner call
         assert_eq!(signature.active_parameter, Some(1));
         assert_eq!(result.active_signature, Some(0));
+    }
+
+    #[test]
+    fn signature_help_after_opening_paren_at_end_of_file() {
+        let test = cursor_test(
+            r#"
+            def func(first: int, second: str) -> None: ...
+
+            func(<CURSOR>"#,
+        );
+
+        let result = test.signature_help().expect("Should have signature help");
+        assert_eq!(result.signatures[0].active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_help_after_comma_at_end_of_file() {
+        let test = cursor_test(
+            r#"
+            def func(first: int, second: str) -> None: ...
+
+            func(1,<CURSOR>"#,
+        );
+
+        let result = test.signature_help().expect("Should have signature help");
+        assert_eq!(result.signatures[0].active_parameter, Some(1));
+    }
+
+    #[test]
+    fn signature_help_in_trailing_whitespace() {
+        for whitespace in [" ", "\t", "\u{000c}"] {
+            let source = format!(
+                "def func(first: int, second: str) -> None: ...\n\nfunc(1,{whitespace}<CURSOR>"
+            );
+            let test = cursor_test(&source);
+
+            let result = test.signature_help().expect("Should have signature help");
+            assert_eq!(result.signatures[0].active_parameter, Some(1));
+        }
+    }
+
+    #[test]
+    fn signature_help_in_trailing_whitespace_before_newline() {
+        let test = cursor_test(
+            "def func(first: int, second: str) -> None: ...\n\nfunc(1,  <CURSOR>  \n    \"value\")",
+        );
+
+        let result = test.signature_help().expect("Should have signature help");
+        assert_eq!(result.signatures[0].active_parameter, Some(1));
     }
 
     #[test]
@@ -1325,7 +1590,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
     }
@@ -1356,7 +1621,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some(expected_docstring.to_string())
         );
     }
@@ -1395,7 +1660,7 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some("The int overload\n".to_string())
         );
     }
@@ -1434,14 +1699,18 @@ def ab(a: int, *, c: int):
             signature
                 .documentation
                 .as_ref()
-                .map(Docstring::render_plaintext),
+                .map(|docstring| docstring.render(MarkupKind::PlainText)),
             Some("The real implementation\n".to_string())
         );
     }
 
     impl CursorTest {
         fn signature_help(&self) -> Option<SignatureHelpInfo<'_>> {
-            crate::signature_help::signature_help(&self.db, self.cursor.file, self.cursor.offset)
+            crate::signature_help::signature_help(
+                &self.db,
+                self.program_file(self.cursor.file),
+                self.cursor.offset,
+            )
         }
 
         fn signature_help_render(&self) -> String {
@@ -1469,8 +1738,7 @@ def ab(a: int, *, c: int):
                     docs = signature
                         .documentation
                         .as_ref()
-                        .map(Docstring::render_plaintext)
-                        .unwrap_or_default(),
+                        .map_or_default(|docstring| docstring.render(MarkupKind::PlainText)),
                 )
                 .unwrap();
                 if let Some(active_parameter) = signature.active_parameter {
@@ -1507,8 +1775,7 @@ def ab(a: int, *, c: int):
                     docs = signature
                         .documentation
                         .as_ref()
-                        .map(Docstring::render_plaintext)
-                        .unwrap_or_default(),
+                        .map_or_default(|docstring| docstring.render(MarkupKind::PlainText)),
                 )
                 .unwrap();
                 if let Some(active_parameter) = signature.active_parameter {

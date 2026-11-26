@@ -13,13 +13,15 @@ from typing import Self, overload, reveal_type
 class C:
     a: D
 
+# error: [invalid-attribute-access]
 C.a
+# error: [invalid-attribute-access]
 reveal_type(C().a)  # revealed: Unknown | D
 
 class D:
     @overload
-    # error: [invalid-overload]
-    # error: [invalid-overload]
+    # error: [single-overload]
+    # error: [missing-overload-implementation]
     def __get__() -> Self:
         pass
 ```

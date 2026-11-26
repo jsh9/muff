@@ -192,6 +192,19 @@ MyEnum = types.new_class("MyEnum", (Enum,))
 reveal_type(MyEnum)  # revealed: <class 'MyEnum'>
 ```
 
+### Protocol bases
+
+`types.new_class()` also preserves the `_ProtocolMeta` metaclass of source-defined protocols.
+
+```py
+import types
+from typing import Protocol
+
+class Interface(Protocol): ...
+
+reveal_type(type(types.new_class("Dynamic", (Interface,))))  # revealed: <class '_ProtocolMeta'>
+```
+
 ### Generic and TypedDict bases
 
 Even though `types.new_class()` handles `__mro_entries__` at runtime, ty does not yet model the full
@@ -229,7 +242,7 @@ emitted:
 
 ```py
 import types
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 class Base:
     base_attr: int = 1
@@ -257,6 +270,18 @@ def g(x: type[Any]):
     reveal_type(Child)  # revealed: <class 'Child'>
 ```
 
+## Instance layout conflicts
+
+As with a `class` statement, the bases of a class created with `types.new_class()` cannot have
+conflicting instance memory layouts:
+
+```py
+import types
+
+# error: [instance-layout-conflict]
+Conflict = types.new_class("Conflict", (int, str))
+```
+
 ## Dynamic namespace via `exec_body`
 
 When `exec_body` is provided, it can populate the class namespace dynamically, so attribute access
@@ -272,19 +297,19 @@ class Base:
 NoBody = types.new_class("NoBody", (Base,))
 instance = NoBody()
 reveal_type(instance.base_attr)  # revealed: int
-instance.missing_attr  # error: [unresolved-attribute]
+instance.missing_attr  # error: [missing-attribute]
 
 # With exec_body=None: same as no exec_body
 NoBodyExplicit = types.new_class("NoBodyExplicit", (Base,), exec_body=None)
 instance_explicit = NoBodyExplicit()
 reveal_type(instance_explicit.base_attr)  # revealed: int
-instance_explicit.missing_attr  # error: [unresolved-attribute]
+instance_explicit.missing_attr  # error: [missing-attribute]
 
 # With exec_body=None passed positionally: same as no exec_body
 NoBodyPositional = types.new_class("NoBodyPositional", (Base,), None, None)
 instance_positional = NoBodyPositional()
 reveal_type(instance_positional.base_attr)  # revealed: int
-instance_positional.missing_attr  # error: [unresolved-attribute]
+instance_positional.missing_attr  # error: [missing-attribute]
 
 # With exec_body: namespace is dynamic, so any attribute access returns Unknown
 def body(ns):

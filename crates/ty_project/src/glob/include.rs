@@ -29,14 +29,15 @@ const DFA_SIZE_LIMIT: usize = 1_000_000;
 /// regex allows to check for prefix matches.
 ///
 /// ## Equality
-/// Equality is based on the patterns from which a filter was constructed.
+/// Equality is based on the original absolute globs.
 ///
 /// Because of that, two filters that include the exact same files but were
 /// constructed from different patterns (or even just order) compare unequal.
 #[derive(Clone, get_size2::GetSize)]
 pub(crate) struct IncludeFilter {
     #[get_size(ignore)]
-    glob_set: GlobSet,
+    glob_set: Option<GlobSet>,
+    /// The original absolute globs, before adding patterns for descendants.
     original_patterns: Box<[Box<str>]>,
     #[get_size(size_fn = bit_box_size)]
     literal_pattern_indices: BitBox,
@@ -58,10 +59,13 @@ fn dfa_memory_usage(dfa: &Option<dfa::dense::DFA<Vec<u32>>>) -> usize {
 impl IncludeFilter {
     /// Whether the file matches any of the globs.
     pub(crate) fn match_file(&self, path: impl AsRef<SystemPath>) -> MatchFile {
+        let Some(glob_set) = &self.glob_set else {
+            return MatchFile::Pattern;
+        };
         let path = path.as_ref();
 
         if self.literal_pattern_indices.is_empty() {
-            return if self.glob_set.is_match(path) {
+            return if glob_set.is_match(path) {
                 MatchFile::Pattern
             } else {
                 MatchFile::No
@@ -69,7 +73,7 @@ impl IncludeFilter {
         }
 
         let mut matches = self.matches.get();
-        self.glob_set.matches_into(path, &mut matches);
+        glob_set.matches_into(path, &mut matches);
 
         if matches.is_empty() {
             MatchFile::No
@@ -216,7 +220,7 @@ impl IncludeFilterBuilder {
             .backslash_escape(true)
             .build()?;
 
-        self.original_patterns.push(input.relative().into());
+        self.original_patterns.push(input.absolute().into());
 
         // `lib` is the same as `lib/**`
         // Add a glob that matches `lib` exactly, change the glob to `lib/**`.
@@ -237,7 +241,8 @@ impl IncludeFilterBuilder {
             // so that `match_file` returns true when matching against a file. However, we don't
             // need to do this if this is a pattern that should only match a directory (specifically, its contents).
             if !only_directory {
-                let is_literal_pattern = globset::escape(glob_pattern) == glob_pattern;
+                // The anchored glob may contain escaped characters from the directory.
+                let is_literal_pattern = globset::escape(input.relative()) == input.relative();
 
                 if is_literal_pattern {
                     self.literal_pattern_indices.resize(self.set_len, false);
@@ -274,7 +279,11 @@ impl IncludeFilterBuilder {
     ///
     /// See <https://github.com/BurntSushi/ripgrep/discussions/2927> for the error returned.
     pub(crate) fn build(self) -> Result<IncludeFilter, globset::Error> {
-        let glob_set = self.set.build()?;
+        // The default unanchored `**` matches every file and cannot be a literal match.
+        let glob_set = match self.original_patterns.as_slice() {
+            [pattern] if pattern.as_ref() == "**" => None,
+            _ => Some(self.set.build()?),
+        };
 
         let dfa_builder = dfa::dense::Builder::new()
             .syntax(
@@ -355,6 +364,28 @@ mod tests {
     }
 
     #[test]
+    fn equality_accounts_for_pattern_root() -> anyhow::Result<()> {
+        let build = |root| -> anyhow::Result<IncludeFilter> {
+            let mut builder = IncludeFilterBuilder::new();
+            builder.add(
+                &PortableGlobPattern::parse("src", PortableGlobKind::Include)?.into_absolute(root),
+            )?;
+            Ok(builder.build()?)
+        };
+        let member = build("/workspace/project")?;
+        let workspace = build("/workspace")?;
+
+        assert_eq!(member.match_file("/workspace/src/main.py"), MatchFile::No);
+        assert_eq!(
+            workspace.match_file("/workspace/src/main.py"),
+            MatchFile::Pattern
+        );
+        assert_ne!(member, workspace);
+        assert_eq!(workspace, build("/workspace")?);
+        Ok(())
+    }
+
+    #[test]
     fn match_directory() {
         // `lib` is the same as `src/**`. It includes a file or directory (including its contents)
         // `src/*`: The same as `src/**`
@@ -422,6 +453,22 @@ mod tests {
 
         assert_eq!(filter.match_file("not_included"), MatchFile::No);
         assert_eq!(filter.match_file("files/a.pi"), MatchFile::No);
+    }
+
+    #[test]
+    fn match_file_with_metacharacters_in_cwd() {
+        let mut builder = IncludeFilterBuilder::new();
+        builder
+            .add(
+                &PortableGlobPattern::parse("file", PortableGlobKind::Include)
+                    .unwrap()
+                    .into_absolute("/root/dir[1]"),
+            )
+            .unwrap();
+        let filter = builder.build().unwrap();
+
+        assert_eq!(filter.match_file("/root/dir[1]/file"), MatchFile::Literal);
+        assert_eq!(filter.match_file("/root/dir1/file"), MatchFile::No);
     }
 
     /// Check that we skip directories that can never match.

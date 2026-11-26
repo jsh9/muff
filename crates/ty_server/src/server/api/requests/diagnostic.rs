@@ -37,12 +37,12 @@ impl BackgroundDocumentRequestHandler for DocumentDiagnosticRequestHandler {
             return Ok(RelatedFullDocumentDiagnosticReport::default().into());
         }
 
-        let diagnostics = compute_diagnostics(db, snapshot.document(), snapshot.encoding());
-
-        let Some(diagnostics) = diagnostics else {
+        let Some(file) = snapshot.document().to_notebook_or_file(db) else {
             return Ok(RelatedFullDocumentDiagnosticReport::default().into());
         };
 
+        let diagnostics =
+            compute_diagnostics(db, file, snapshot.encoding(), snapshot.global_settings());
         let result_id = diagnostics.result_id(db, snapshot.resolved_client_capabilities());
 
         let report = match result_id {
@@ -55,24 +55,18 @@ impl BackgroundDocumentRequestHandler for DocumentDiagnosticRequestHandler {
                 }
                 .into()
             }
-            new_id => {
-                RelatedFullDocumentDiagnosticReport {
-                    related_documents: None,
-                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                        result_id: new_id,
-                        // SAFETY: Pull diagnostic requests are only called for text documents, not for
-                        // notebook documents.
-                        items: diagnostics
-                            .to_lsp_diagnostics(
-                                db,
-                                snapshot.resolved_client_capabilities(),
-                                snapshot.global_settings(),
-                            )
-                            .expect_text_document(),
-                    },
-                }
-                .into()
+            new_id => RelatedFullDocumentDiagnosticReport {
+                related_documents: None,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: new_id,
+                    // A notebook is checked as a whole, but a pull response only includes
+                    // diagnostics for the requested cell.
+                    items: diagnostics
+                        .to_lsp_diagnostics(db, snapshot.resolved_client_capabilities())
+                        .into_document_diagnostics(snapshot.document().uri()),
+                },
             }
+            .into(),
         };
 
         Ok(report)

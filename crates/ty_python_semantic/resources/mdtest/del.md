@@ -145,7 +145,7 @@ c = C()
 del c.x
 reveal_type(c.x)  # revealed: int
 
-# error: [unresolved-attribute]
+# error: [missing-attribute]
 del c.non_existent
 
 c.x = 1
@@ -246,7 +246,7 @@ class RejectsDelete:
 class BadDelAttr:
     x: int = 1
 
-    # error: [invalid-method-override] "Invalid override of method `__delattr__`: Definition is incompatible with `object.__delattr__`"
+    # error: [incompatible-method-override] "Invalid override of method `__delattr__`: Definition is incompatible with `object.__delattr__`"
     def __delattr__(self, name: int) -> None:
         pass
 
@@ -373,7 +373,7 @@ item deletion. The `__delitem__` method is independent of `__getitem__`.
 ```py
 from typing import Protocol, TypeVar
 
-KT = TypeVar("KT")
+KT = TypeVar("KT", contravariant=True)
 
 class CanDelItem(Protocol[KT]):
     def __delitem__(self, k: KT, /) -> None: ...
@@ -448,7 +448,6 @@ error[invalid-argument-type]: Cannot delete required key "name" from TypedDict `
    |
 19 | del m["name"]
    |       ^^^^^^
-   |
 info: Field defined here
  --> src/mdtest_snippet.py:3:7
   |
@@ -459,7 +458,6 @@ info: Field defined here
   |     |
   |     `name` declared as required here
   |     Consider making it `NotRequired`
-  |
 info: Only keys marked as `NotRequired` (or in a TypedDict with `total=False`) can be deleted
 ```
 
@@ -488,7 +486,6 @@ error[invalid-argument-type]: Cannot delete required key "name" from TypedDict `
    |
 23 | del mixed["name"]
    |           ^^^^^^
-   |
 info: Field defined here
   --> src/mdtest_snippet.py:11:7
    |
@@ -499,7 +496,6 @@ info: Field defined here
    |     |
    |     `name` declared as required here
    |     Consider making it `NotRequired`
-   |
 info: Only keys marked as `NotRequired` (or in a TypedDict with `total=False`) can be deleted
 ```
 
@@ -516,5 +512,4 @@ error[invalid-argument-type]: Cannot delete unknown key "non_existent" from Type
    |
 25 | del mixed["non_existent"]
    |           ^^^^^^^^^^^^^^
-   |
 ```

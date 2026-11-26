@@ -9,7 +9,8 @@ name, and not just by its numeric position within the tuple:
 
 ```py
 from typing import NamedTuple, Sequence
-from ty_extensions import static_assert, is_subtype_of, is_assignable_to, reveal_mro
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of, is_assignable_to, reveal_mro
 
 class Person(NamedTuple):
     id: int
@@ -131,6 +132,121 @@ reveal_type(alice5.id)  # revealed: int
 reveal_type(alice5.name)  # revealed: str
 ```
 
+### Union of recursive named tuples
+
+```py
+from __future__ import annotations
+
+from typing import NamedTuple, TypeAlias
+
+class Negation(NamedTuple):
+    child: Expression
+
+class Group(NamedTuple):
+    children: tuple[Expression, ...]
+
+Expression: TypeAlias = Negation | Group | str
+
+def _(group: Group):
+    reveal_type(group[0])  # revealed: tuple[Negation | Group | str, ...]
+```
+
+### Union containing a subclass of a recursive named tuple
+
+```py
+from __future__ import annotations
+
+from typing import NamedTuple, TypeAlias
+
+class Negation(NamedTuple):
+    child: Expression
+
+class Group(NamedTuple):
+    children: tuple[Expression, ...]
+
+class Subgroup(Group): ...
+
+Expression: TypeAlias = Negation | Subgroup | str
+
+def _(group: Subgroup):
+    reveal_type(group[0])  # revealed: tuple[Negation | Subgroup | str, ...]
+```
+
+### Recursive fields with a wide union
+
+Two named tuples can share a field type that refers back to both of them. The repeated `int` members
+exercise normalization of a wide union. Both fields must retain `Leaf`.
+
+```py
+from typing import NamedTuple, Union
+from typing_extensions import assert_type
+
+class Leaf(NamedTuple):
+    value: "Metadata"
+
+class Closure(NamedTuple):
+    entries: Union[int, Leaf, int, int, int, int, int, int]
+
+class Partial(NamedTuple):
+    entries: Union[int, Leaf, int, int, int, int, int, int]
+
+Metadata = Closure | Partial
+
+def check(closure: Closure, partial: Partial) -> None:
+    assert_type(closure.entries, int | Leaf)
+    assert_type(partial.entries, int | Leaf)
+```
+
+### Explicit dataclass-transform metaclass
+
+`models.pyi`:
+
+```pyi
+from typing import dataclass_transform
+
+@dataclass_transform()
+class RecordMeta(type): ...
+```
+
+```py
+from dataclasses import fields
+from typing import NamedTuple
+from models import RecordMeta
+
+# TODO: Report the metaclass conflict that makes this class definition raise TypeError.
+class Point(NamedTuple, metaclass=RecordMeta):
+    x: int
+
+fields(Point)
+```
+
+### Fields declared in stubs
+
+An annotation-only field in a stub remains a required constructor argument. An explicit ellipsis
+assignment represents a default and makes its field optional.
+
+`records.pyi`:
+
+```pyi
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    required: int
+    optional: str = ...
+```
+
+The generated constructor requires the first field but permits omitting the second:
+
+```py
+from records import Record
+
+reveal_type(Record.__new__)  # revealed: [Self](_cls: type[Self], required: int, optional: str = ...) -> Self
+
+Record(1)
+Record(1, "value")
+Record()  # error: [missing-argument]
+```
+
 ### Name mismatch diagnostics
 
 <!-- snapshot-diagnostics -->
@@ -139,12 +255,63 @@ The assigned variable name should match the `typename` argument:
 
 ```py
 from typing import NamedTuple
-from ty_extensions import is_subtype_of
+from ty_extensions._internal import is_subtype_of
 
-# error: [mismatched-type-name]
+# error: [mismatched-namedtuple-name]
 Mismatch = NamedTuple("WrongName", [("x", int)])
 reveal_type(Mismatch)  # revealed: <class 'WrongName'>
 reveal_type(is_subtype_of(Mismatch, tuple[int]))  # revealed: ConstraintSet[Literal[True]]
+```
+
+### Name comparison through type aliases
+
+The name comparison follows a type alias to a single string literal. The rule is meant to spot
+simple, obvious typos. It allows names of type `str` so callers can still construct named tuples
+dynamically when that's desirable. If the name argument has a union of string literals as its type,
+the caller is likely doing the same thing.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from collections import namedtuple
+from typing import Literal, NamedTuple
+
+type VectorName = Literal["Vector"]
+type PointNames = Literal["Vector", "Coordinate"]
+
+def fixed_name(name: VectorName) -> None:
+    # error: [mismatched-namedtuple-name] "Expected "Point", got "Vector""
+    Point = NamedTuple(name, [("x", int)])
+    # error: [mismatched-namedtuple-name] "Expected "Point", got "Vector""
+    Point = namedtuple(typename=name, field_names="x")
+
+def choose_name(name: Literal["Vector", "Coordinate"], aliased_name: PointNames) -> None:
+    Point = NamedTuple(name, [("x", int)])  # ok
+    Point = NamedTuple(aliased_name, [("x", int)])  # ok
+    Point = namedtuple(typename=name, field_names="x")  # ok
+    Point = namedtuple(typename=aliased_name, field_names="x")  # ok
+```
+
+### Invalid literal names
+
+Both factories reject names that are keywords or invalid identifiers. An invalid name is reported by
+`invalid-named-tuple` even when the name mismatch rule is enabled.
+
+```py
+from collections import namedtuple
+from typing import NamedTuple
+
+# error: [invalid-named-tuple] "Type name "not valid" in `NamedTuple()` is not a valid Python identifier"
+Spaced = NamedTuple("not valid", [("x", int)])
+
+# error: [invalid-named-tuple] "Type name "class" in `namedtuple()` cannot be a Python keyword"
+Keyword = namedtuple(typename="class", field_names="x", rename=True)
+
+# Soft keywords are valid type names.
+match = namedtuple("match", "x")  # ok
 ```
 
 ### Functional syntax with string annotations
@@ -181,9 +348,9 @@ a = A(x=B(x=C(x=A(x=None))))
 reveal_type(a.x)  # revealed: B | None
 
 if a.x:
-    reveal_type(a.x and a.x.x)  # revealed: C
-    reveal_type(a.x and a.x.x.x)  # revealed: A
-    reveal_type(a.x and a.x.x.x.x)  # revealed: B | None
+    reveal_type(a.x.x)  # revealed: C
+    reveal_type(a.x.x.x)  # revealed: A
+    reveal_type(a.x.x.x.x)  # revealed: B | None
 
 A(x=42)  # error: [invalid-argument-type]
 
@@ -210,7 +377,7 @@ class Point(NamedTuple("Point", [("x", int), ("y", int)])):
 p = Point(3, 4)
 reveal_type(p.x)  # revealed: int
 reveal_type(p.y)  # revealed: int
-reveal_type(p.magnitude())  # revealed: int | float
+reveal_type(p.magnitude())  # revealed: float
 ```
 
 String annotations in dangling calls work correctly for forward references to classes defined in the
@@ -261,7 +428,7 @@ reveal_type(n.next)  # revealed: Unknown | None
 Dangling calls cannot contain other dangling calls; that's an invalid type form:
 
 ```py
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 # error: [invalid-type-form]
 class A(NamedTuple("B", [("x", NamedTuple("C", [("x", "A | None")]))])):
@@ -286,13 +453,18 @@ reveal_type(p.id)  # revealed: int
 reveal_type(p.name)  # revealed: str
 ```
 
-Non-literal `str` names should not be treated as proven mismatches:
+### Class names of type `str`
+
+ty skips the name comparison for both `NamedTuple` and `namedtuple` when the `typename` argument has
+type `str`.
 
 ```py
+from collections import namedtuple
 from typing import NamedTuple
 
 def f(name: str) -> None:
-    Match = NamedTuple(name, [("value", int)])
+    Record = NamedTuple(name, [("value", int)])  # ok
+    Row = namedtuple(name, ["value"])  # ok
 ```
 
 ### Functional syntax with tuple variable fields
@@ -302,7 +474,8 @@ from the inferred tuple type. We instead emit a diagnostic:
 
 ```py
 from typing import NamedTuple
-from ty_extensions import static_assert, is_subtype_of, reveal_mro
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of, reveal_mro
 
 fields = (("host", str), ("port", int))
 # error: [invalid-named-tuple] "Invalid argument to parameter `fields` of `NamedTuple()`: `fields` must be a literal list or tuple"
@@ -375,7 +548,7 @@ python-version = "3.11"
 
 ```py
 from typing import NamedTuple
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 # Variadic tuple - we can't determine the exact fields statically.
 def get_fields() -> tuple[tuple[str, type[int]], *tuple[tuple[str, type[str]], ...]]:
@@ -396,7 +569,7 @@ Similarly for `collections.namedtuple`:
 
 ```py
 import collections
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 def get_field_names() -> tuple[str, *tuple[str, ...]]:
     return ("x", "y")
@@ -418,7 +591,7 @@ properly inherited:
 
 ```py
 from typing import NamedTuple
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 class Url(NamedTuple("Url", [("host", str), ("path", str)])):
     pass
@@ -523,7 +696,7 @@ accepted because the constructor uses a gradual signature:
 
 ```py
 import collections
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 CheckerConfig = ["duration", "video_fps", "audio_sample_rate"]
 GroundTruth = collections.namedtuple("GroundTruth", " ".join(CheckerConfig))
@@ -548,7 +721,7 @@ The `collections.namedtuple` function accepts `str | Iterable[str]` for `field_n
 
 ```py
 import collections
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 # String field names (space-separated)
 Point1 = collections.namedtuple("Point1", "x y")
@@ -622,7 +795,7 @@ well as `rename`, `defaults`, and `module`:
 
 ```py
 import collections
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 # Both `typename` and `field_names` can be passed as keyword arguments
 NT1 = collections.namedtuple(typename="NT1", field_names="x y")
@@ -675,7 +848,7 @@ The `rename`, `defaults`, and `module` keyword arguments:
 
 ```py
 import collections
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 # `rename=True` replaces invalid identifiers with positional names
 Point = collections.namedtuple("Point", ["x", "class", "_y", "z", "z"], rename=True)
@@ -1195,11 +1368,11 @@ class Property[T](NamedTuple):
     name: str
     value: T
 
-reveal_type(Property("height", 3.4))  # revealed: Property[float]
+reveal_type(Property("height", 3.4))  # revealed: Property[float*]
 reveal_type(Property.value)  # revealed: property
 reveal_type(Property.value.fget)  # revealed: (self, /) -> Unknown
 reveal_type(Property[str].value.fget)  # revealed: (self, /) -> str
-reveal_type(Property("height", 3.4).value)  # revealed: float
+reveal_type(Property("height", 3.4).value)  # revealed: float*
 
 T = TypeVar("T")
 
@@ -1211,7 +1384,37 @@ reveal_type(LegacyProperty("height", 42))  # revealed: LegacyProperty[int]
 reveal_type(LegacyProperty.value)  # revealed: property
 reveal_type(LegacyProperty.value.fget)  # revealed: (self, /) -> Unknown
 reveal_type(LegacyProperty[str].value.fget)  # revealed: (self, /) -> str
-reveal_type(LegacyProperty("height", 3.4).value)  # revealed: int | float
+reveal_type(LegacyProperty("height", 3.4).value)  # revealed: float
+```
+
+### Methods with default type parameters
+
+Methods on generic named tuples honor explicit type arguments that override their defaults,
+including when accessed through a subclass. The `_make` class method returns the specialized
+receiver type.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+from typing import NamedTuple
+
+class Box[T = int](NamedTuple):
+    value: T
+
+class Child[T = int](Box[T]):
+    pass
+
+def methods(box: Box[str], child: Child[str]) -> None:
+    reveal_type(box._asdict())  # revealed: dict[str, Any]
+    reveal_type(child._asdict())  # revealed: dict[str, Any]
+    reveal_type(Box[str]._make(("value",)))  # revealed: Box[str]
+    reveal_type(Child[str]._make(("value",)))  # revealed: Child[str]
+
+reveal_type(Box._make((1,)))  # revealed: Box[int]
+reveal_type(Child._make((1,)))  # revealed: Child[int]
 ```
 
 ### Functional syntax with generics
@@ -1261,7 +1464,7 @@ from typing import NamedTuple
 class Point(NamedTuple):
     x: int
 
-# error: [unresolved-attribute]
+# error: [missing-attribute]
 reveal_type(Point.__match_args__)  # revealed: Unknown
 ```
 
@@ -1280,7 +1483,7 @@ reveal_type(Person.__match_args__)  # revealed: tuple[Literal["name"], Literal["
 reveal_type(Person.__slots__)  # revealed: tuple[()]
 reveal_type(Person._make)  # revealed: bound method <class 'Person'>._make(iterable: Iterable[Any]) -> Person
 reveal_type(Person._asdict)  # revealed: def _asdict(self) -> dict[str, Any]
-reveal_type(Person._replace)  # revealed: (self: Self, *, name: str = ..., age: int | None = ...) -> Self
+reveal_type(Person._replace)  # revealed: [Self](self: Self, /, *, name: str = ..., age: int | None = ...) -> Self
 
 reveal_type(Person._make(("Alice", 42)))  # revealed: Person
 
@@ -1309,6 +1512,97 @@ class IntBox(Box[int]):
     pass
 
 reveal_type(IntBox(1)._replace(content=42))  # revealed: IntBox
+```
+
+### `_replace` methods from different classes
+
+The `_replace` methods of different named tuples have distinct `Self` bounds even when their fields
+match. A union of these methods should not promise to return only one of the classes, regardless of
+branch order:
+
+```py
+from typing import Callable, NamedTuple
+
+class A(NamedTuple):
+    x: int
+
+class B(NamedTuple):
+    x: int
+
+def choose(flag: bool) -> Callable[..., A]:
+    # TODO: Report [invalid-explicit-return] (https://github.com/astral-sh/ty/issues/3114).
+    return A._replace if flag else B._replace  # ok
+
+def reversed_order(flag: bool) -> Callable[..., A]:
+    # TODO: Report [invalid-explicit-return] (https://github.com/astral-sh/ty/issues/3114).
+    return B._replace if flag else A._replace  # ok
+
+def either_class(flag: bool) -> Callable[..., A | B]:
+    return A._replace if flag else B._replace  # ok
+```
+
+The same distinction applies to named tuples created with the functional syntax:
+
+```py
+DynamicA = NamedTuple("DynamicA", [("x", int)])
+DynamicB = NamedTuple("DynamicB", [("x", int)])
+
+def choose_dynamic(flag: bool) -> Callable[..., DynamicA]:
+    # TODO: Report [invalid-explicit-return] (https://github.com/astral-sh/ty/issues/3114).
+    return DynamicA._replace if flag else DynamicB._replace  # ok
+```
+
+### Fields named `self`
+
+Replacement methods take their receiver positionally, so `self` can be used as a keyword argument to
+replace a field.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    self: int
+
+record = Record(self=1)
+reveal_type(record._replace(self=2))  # revealed: Record
+reveal_type(record.__replace__(self=2))  # revealed: Record
+reveal_type(Record._replace(record, self=2))  # revealed: Record
+record._replace(self="wrong")  # error: [invalid-argument-type]
+
+DynamicRecord = NamedTuple("DynamicRecord", [("self", int)])
+dynamic_record = DynamicRecord(self=1)
+reveal_type(dynamic_record._replace(self=2))  # revealed: DynamicRecord
+reveal_type(dynamic_record.__replace__(self=2))  # revealed: DynamicRecord
+```
+
+### Fields annotated with `Self`
+
+The generated constructor and replacement methods use the same inferable `Self` for their receiver
+and field annotations.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+from typing import NamedTuple, Self
+
+class Node(NamedTuple):
+    parent: Self | None = None
+
+class Child(Node): ...
+
+reveal_type(Node(Node()))  # revealed: Node
+reveal_type(Child(Child()))  # revealed: Child
+reveal_type(Child()._replace(parent=Child()))  # revealed: Child
+reveal_type(Child().__replace__(parent=Child()))  # revealed: Child
+Child()._replace(parent=1)  # error: [invalid-argument-type]
 ```
 
 ## `collections.namedtuple`
@@ -1398,7 +1692,7 @@ reveal_type(Person.__match_args__)  # revealed: tuple[Literal["name"], Literal["
 reveal_type(Person._field_defaults)  # revealed: dict[str, Any]
 reveal_type(Person._make)  # revealed: bound method <class 'Person'>._make(iterable: Iterable[Any]) -> Person
 reveal_type(Person._asdict)  # revealed: def _asdict(self) -> dict[str, Any]
-reveal_type(Person._replace)  # revealed: (self: Self, *, name: Any = ..., age: Any = ...) -> Self
+reveal_type(Person._replace)  # revealed: [Self](self: Self, /, *, name: Any = ..., age: Any = ...) -> Self
 
 # _make creates instances from an iterable.
 reveal_type(Person._make(["Alice", 30]))  # revealed: Person
@@ -1432,7 +1726,7 @@ reveal_type(typing.NamedTuple.__name__)  # revealed: str
 reveal_type(typing.NamedTuple.__qualname__)  # revealed: str
 reveal_type(typing.NamedTuple.__kwdefaults__)  # revealed: dict[str, Any] | None
 
-# error: [unresolved-attribute]
+# error: [missing-attribute]
 reveal_type(typing.NamedTuple.__mro__)  # revealed: Unknown
 ```
 
@@ -1446,7 +1740,8 @@ satisfy:
 ```py
 def expects_named_tuple(x: typing.NamedTuple):
     reveal_type(x)  # revealed: tuple[object, ...] & NamedTupleLike
-    reveal_type(x._make)  # revealed: bound method type[NamedTupleLike]._make(iterable: Iterable[Any]) -> NamedTupleLike
+    # revealed: bound method (type[tuple[object, ...]] & type[NamedTupleLike])._make(iterable: Iterable[Any]) -> tuple[object, ...] & NamedTupleLike
+    reveal_type(x._make)
     # revealed: bound method (tuple[object, ...] & NamedTupleLike)._replace(...) -> tuple[object, ...] & NamedTupleLike
     reveal_type(x._replace)
     # revealed: Overload[(value: tuple[object, ...], /) -> tuple[object, ...], [_T](value: tuple[_T, ...], /) -> tuple[object, ...]]
@@ -1455,7 +1750,7 @@ def expects_named_tuple(x: typing.NamedTuple):
     reveal_type(x.__iter__)
 
 def _(y: type[typing.NamedTuple]):
-    reveal_type(y)  # revealed: @Todo(unsupported type[X] special form)
+    reveal_type(y)  # revealed: type[tuple[object, ...]] & type[NamedTupleLike]
 
 # error: [invalid-type-form] "Special form `typing.NamedTuple` expected no type parameter"
 def _(z: typing.NamedTuple[int]): ...
@@ -1467,7 +1762,8 @@ all NamedTuple implementations automatically compatible:
 
 ```py
 from typing import NamedTuple, Protocol, Iterable, Any
-from ty_extensions import static_assert, is_assignable_to
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to
 
 class Point(NamedTuple):
     x: int
@@ -1475,7 +1771,7 @@ class Point(NamedTuple):
 
 reveal_type(Point._make)  # revealed: bound method <class 'Point'>._make(iterable: Iterable[Any]) -> Point
 reveal_type(Point._asdict)  # revealed: def _asdict(self) -> dict[str, Any]
-reveal_type(Point._replace)  # revealed: (self: Self, *, x: int = ..., y: int = ...) -> Self
+reveal_type(Point._replace)  # revealed: [Self](self: Self, /, *, x: int = ..., y: int = ...) -> Self
 
 # Point is assignable to NamedTuple.
 static_assert(is_assignable_to(Point, NamedTuple))
@@ -1630,6 +1926,150 @@ reveal_type(Duplicate)  # revealed: <class 'Duplicate'>
 # error: [invalid-named-tuple] "Field name `not valid` in `NamedTuple()` is not a valid identifier"
 Invalid = NamedTuple("Invalid", [("not valid", int), ("ok", str)])
 reveal_type(Invalid)  # revealed: <class 'Invalid'>
+```
+
+## NamedTuple fields cannot be qualified with `ClassVar` or `Final`
+
+Type checkers reject `ClassVar` and `Final` qualifiers on `NamedTuple` fields. When annotations are
+evaluated eagerly, passing these qualifiers to `typing._type_check` also raises `TypeError` while
+the class is defined.
+
+```py
+from typing import ClassVar, Final, NamedTuple
+
+class Foo(NamedTuple):
+    # error: [invalid-named-tuple] "Type qualifier `ClassVar` is not allowed on NamedTuple field `a`"
+    a: ClassVar[int]
+    # error: [invalid-named-tuple] "Type qualifier `Final` is not allowed on NamedTuple field `b`"
+    b: Final[str] = "foo"
+    # error: [invalid-named-tuple] "Type qualifier `ClassVar` is not allowed on NamedTuple field `c`"
+    # error: [invalid-named-tuple] "Type qualifier `Final` is not allowed on NamedTuple field `c`"
+    # error: [redundant-final-classvar] "Combining `ClassVar` and `Final` is redundant"
+    c: ClassVar[Final[int]]
+```
+
+An unsubscripted qualifier is rejected for the same reason:
+
+```py
+from typing import ClassVar, NamedTuple
+
+class Bare(NamedTuple):
+    # error: [invalid-named-tuple] "Type qualifier `ClassVar` is not allowed on NamedTuple field `x`"
+    x: ClassVar
+```
+
+A class that inherits from a `NamedTuple` class is an ordinary class at runtime, so it may use both
+qualifiers freely:
+
+```py
+from typing import ClassVar, Final, NamedTuple
+
+class Base(NamedTuple):
+    x: int
+
+class Sub(Base):
+    y: ClassVar[int] = 1
+    z: Final[str] = "z"
+```
+
+The full diagnostic points at the offending field:
+
+```py
+from typing import ClassVar, NamedTuple
+
+class Snapshot(NamedTuple):
+    # snapshot
+    a: ClassVar[int]
+```
+
+```snapshot
+error[invalid-named-tuple]: Type qualifier `ClassVar` is not allowed in a NamedTuple field
+  --> src/mdtest_snippet.py:29:5
+   |
+29 |     a: ClassVar[int]
+   |     ^^^^^^^^^^^^^^^^
+```
+
+## NamedTuple qualifiers and redeclared symbols
+
+A later method declaration does not change the field annotation processed by `NamedTuple`.
+
+```py
+from typing import Final, NamedTuple
+
+class Redeclared(NamedTuple):
+    # error: [invalid-named-tuple] "Type qualifier `Final` is not allowed on NamedTuple field `x`"
+    x: Final[int]
+
+    def x(self) -> int:
+        return 1
+```
+
+## NamedTuple qualifiers in conditional declarations
+
+When only one branch qualifies a field, the diagnostic points to the declaration in that branch.
+
+```py
+from typing import Final, NamedTuple
+
+def condition() -> bool:
+    return True
+
+class Conditional(NamedTuple):
+    if condition():
+        y: int
+    else:
+        # error: [invalid-named-tuple] "Type qualifier `Final` is not allowed on NamedTuple field `y`"
+        y: Final[int]
+```
+
+Statically unreachable qualified declarations are ignored:
+
+```py
+class Unreachable(NamedTuple):
+    if False:
+        hidden: Final[int]
+    visible: int
+```
+
+## NamedTuple qualifiers in deferred annotations
+
+The restriction still applies when annotation evaluation is postponed. The diagnostic does not claim
+that defining the class will fail at runtime, because Python stores a forward reference in this
+case.
+
+```py
+from __future__ import annotations
+
+from typing import Final, NamedTuple
+
+class Deferred(NamedTuple):
+    # snapshot
+    x: Final[int]
+```
+
+```snapshot
+error[invalid-named-tuple]: Type qualifier `Final` is not allowed in a NamedTuple field
+ --> src/mdtest_snippet.py:7:5
+  |
+7 |     x: Final[int]
+  |     ^^^^^^^^^^^^^
+```
+
+## NamedTuple qualifiers in quoted and wrapped annotations
+
+Explicitly quoted and `Annotated` field annotations are rejected for the same static reason:
+
+```py
+from typing import Annotated, Final, NamedTuple
+
+class Quoted(NamedTuple):
+    # error: [invalid-named-tuple] "Type qualifier `Final` is not allowed on NamedTuple field `x`"
+    x: "Final[int]"
+
+class Wrapped(NamedTuple):
+    # error: [invalid-named-tuple] "Type qualifier `Final` is not allowed on NamedTuple field `x`"
+    x: Annotated[Final[int], "metadata"]
 ```
 
 ## Prohibited NamedTuple attributes
@@ -1883,5 +2323,5 @@ class GenericChild(GenericBase[T]):
         reveal_type(instance)  # revealed: Self@__new__
         return instance
 
-reveal_type(GenericChild(x=3.14))  # revealed: GenericChild[int | float]
+reveal_type(GenericChild(x=3.14))  # revealed: GenericChild[float]
 ```

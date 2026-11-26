@@ -4,12 +4,12 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::string::ToString;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, bail};
-use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
+use globset::{Candidate, Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use log::debug;
 use pep440_rs::{VersionSpecifier, VersionSpecifiers};
-use ruff_db::diagnostic::DiagnosticFormat;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
@@ -184,10 +184,6 @@ impl GlobPath {
         let absolute = fs::normalize_path_to(path, escaped);
         Self { path: absolute }
     }
-
-    pub fn into_inner(self) -> PathBuf {
-        self.path
-    }
 }
 
 impl Deref for GlobPath {
@@ -322,14 +318,23 @@ impl CacheKey for FilePatternSet {
 /// A glob pattern and associated data for matching file paths.
 #[derive(Debug, Clone)]
 pub struct PerFile<T> {
+    pattern: Arc<PerFilePattern>,
+    /// The per-file data associated with these glob patterns.
+    data: T,
+}
+
+/// A pattern shared by configurations that inherit the same per-file setting.
+#[derive(Debug)]
+struct PerFilePattern {
     /// The glob pattern used to construct the [`PerFile`].
     basename: String,
     /// The same pattern as `basename` but normalized to the project root directory.
     absolute: GlobPath,
     /// Whether the glob pattern should be negated (e.g. `!*.ipynb`)
     negated: bool,
-    /// The per-file data associated with these glob patterns.
-    data: T,
+    // Compile only when settings are resolved, after configuration overrides have been applied.
+    absolute_matcher: OnceLock<Result<GlobMatcher, globset::Error>>,
+    basename_matcher: OnceLock<Result<GlobMatcher, globset::Error>>,
 }
 
 impl<T> PerFile<T> {
@@ -346,9 +351,13 @@ impl<T> PerFile<T> {
         let project_root = project_root.unwrap_or(fs::get_cwd());
 
         Self {
-            absolute: GlobPath::normalize(&pattern, project_root),
-            basename: pattern,
-            negated,
+            pattern: Arc::new(PerFilePattern {
+                absolute: GlobPath::normalize(&pattern, project_root),
+                basename: pattern,
+                negated,
+                absolute_matcher: OnceLock::new(),
+                basename_matcher: OnceLock::new(),
+            }),
             data,
         }
     }
@@ -495,13 +504,13 @@ impl ExtensionMapping {
     }
 
     /// Return the [`Language`] for the given file.
-    pub fn get(&self, path: &Path) -> Option<Language> {
+    fn get(&self, path: &Path) -> Option<Language> {
         let ext = path.extension()?.to_str()?;
         self.0.get(ext).copied()
     }
 
     /// Return the [`Language`] for a given file extension.
-    pub fn get_extension(&self, ext: &str) -> Option<Language> {
+    fn get_extension(&self, ext: &str) -> Option<Language> {
         self.0.get(ext).copied()
     }
 
@@ -591,33 +600,6 @@ impl Display for OutputFormat {
     }
 }
 
-/// The subset of output formats only implemented in Ruff, not in `ruff_db` via `DisplayDiagnostics`.
-pub enum RuffOutputFormat {
-    Grouped,
-    Sarif,
-}
-
-impl TryFrom<OutputFormat> for DiagnosticFormat {
-    type Error = RuffOutputFormat;
-
-    fn try_from(format: OutputFormat) -> std::result::Result<Self, Self::Error> {
-        match format {
-            OutputFormat::Concise => Ok(DiagnosticFormat::Concise),
-            OutputFormat::Full => Ok(DiagnosticFormat::Full),
-            OutputFormat::Json => Ok(DiagnosticFormat::Json),
-            OutputFormat::JsonLines => Ok(DiagnosticFormat::JsonLines),
-            OutputFormat::Junit => Ok(DiagnosticFormat::Junit),
-            OutputFormat::Gitlab => Ok(DiagnosticFormat::Gitlab),
-            OutputFormat::Pylint => Ok(DiagnosticFormat::Pylint),
-            OutputFormat::Rdjson => Ok(DiagnosticFormat::Rdjson),
-            OutputFormat::Azure => Ok(DiagnosticFormat::Azure),
-            OutputFormat::Github => Ok(DiagnosticFormat::Github),
-            OutputFormat::Grouped => Err(RuffOutputFormat::Grouped),
-            OutputFormat::Sarif => Err(RuffOutputFormat::Sarif),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(try_from = "String")]
 pub struct RequiredVersion(VersionSpecifiers);
@@ -699,14 +681,14 @@ impl IdentifierPattern {
         }
     }
 
-    pub fn matches(&self, candidate: &str) -> bool {
+    pub(crate) fn matches(&self, candidate: &str) -> bool {
         match self {
             Self::Literal(literal) => literal == candidate,
             Self::Glob(pattern) => pattern.matches(candidate),
         }
     }
 
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Literal(literal) => literal,
             Self::Glob(pattern) => pattern.as_str(),
@@ -731,10 +713,10 @@ impl FromStr for IdentifierPattern {
 /// Like [`PerFile`] but with string globs compiled to [`GlobMatcher`]s for more efficient usage.
 #[derive(Debug, Clone)]
 pub struct CompiledPerFile<T> {
-    pub absolute_matcher: GlobMatcher,
-    pub basename_matcher: GlobMatcher,
-    pub negated: bool,
-    pub data: T,
+    absolute_matcher: GlobMatcher,
+    basename_matcher: GlobMatcher,
+    negated: bool,
+    data: T,
 }
 
 impl<T> CompiledPerFile<T> {
@@ -806,20 +788,30 @@ impl<T> CompiledPerFileList<T> {
         let inner: Result<Vec<_>> = per_file_items
             .into_iter()
             .map(|per_file_ignore| {
+                let pattern = &per_file_ignore.pattern;
+                // Cloning matchers shares the compiled regex but gives each settings object
+                // its own scratch space for matching.
                 // Construct absolute path matcher.
-                let absolute_matcher = Glob::new(&per_file_ignore.absolute.to_string_lossy())
-                    .with_context(|| format!("invalid glob {:?}", per_file_ignore.absolute))?
-                    .compile_matcher();
+                let absolute_matcher = pattern
+                    .absolute_matcher
+                    .get_or_init(|| {
+                        Glob::new(&pattern.absolute.to_string_lossy())
+                            .map(|glob| glob.compile_matcher())
+                    })
+                    .clone()
+                    .with_context(|| format!("invalid glob {:?}", pattern.absolute))?;
 
                 // Construct basename matcher.
-                let basename_matcher = Glob::new(&per_file_ignore.basename)
-                    .with_context(|| format!("invalid glob {:?}", per_file_ignore.basename))?
-                    .compile_matcher();
+                let basename_matcher = pattern
+                    .basename_matcher
+                    .get_or_init(|| Glob::new(&pattern.basename).map(|glob| glob.compile_matcher()))
+                    .clone()
+                    .with_context(|| format!("invalid glob {:?}", pattern.basename))?;
 
                 Ok(CompiledPerFile::new(
                     absolute_matcher,
                     basename_matcher,
-                    per_file_ignore.negated,
+                    pattern.negated,
                     per_file_ignore.data,
                 ))
             })
@@ -845,8 +837,10 @@ impl<T: std::fmt::Debug> CompiledPerFileList<T> {
         'a: 'p,
     {
         let file_name = path.file_name().expect("Unable to parse filename");
+        let basename = Candidate::new(file_name);
+        let absolute = Candidate::new(path);
         self.inner.iter().filter_map(move |entry| {
-            if entry.basename_matcher.is_match(file_name) {
+            if entry.basename_matcher.is_match_candidate(&basename) {
                 if entry.negated {
                     None
                 } else {
@@ -859,7 +853,7 @@ impl<T: std::fmt::Debug> CompiledPerFileList<T> {
                     );
                     Some(&entry.data)
                 }
-            } else if entry.absolute_matcher.is_match(path) {
+            } else if entry.absolute_matcher.is_match_candidate(&absolute) {
                 if entry.negated {
                     None
                 } else {
@@ -918,9 +912,7 @@ impl CompiledPerFileIgnoreList {
         let mut resolution_error = None;
         let list = CompiledPerFileList::resolve(per_file_ignores.into_iter().map(|ignore| {
             let PerFile {
-                basename,
-                absolute,
-                negated,
+                pattern,
                 data: selectors,
             } = ignore.0;
             // Rules in preview are included here via `all_rules` even if preview mode is disabled.
@@ -942,12 +934,7 @@ impl CompiledPerFileIgnoreList {
                 })
                 .flat_map(|selector| selector.all_rules())
                 .collect();
-            PerFile {
-                basename,
-                absolute,
-                negated,
-                data,
-            }
+            PerFile { pattern, data }
         }))?;
 
         if let Some(error) = resolution_error {
@@ -998,6 +985,10 @@ impl CompiledPerFileTargetVersionList {
     }
 
     pub fn is_match(&self, path: &Path) -> Option<ast::PythonVersion> {
+        if self.0.is_empty() {
+            return None;
+        }
+
         self.0
             .iter_matches(path, "Setting Python version")
             .next()

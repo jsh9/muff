@@ -143,7 +143,7 @@ a = test  # type: ignore[name-defined, ty:unresolved-reference]
 
 ```py
 # error: [unresolved-reference]
-# error: [ignore-comment-unknown-rule]
+# error: [unknown-rule-in-ignore-comment]
 a = test  # type: ignore[ty:name-defined]
 ```
 
@@ -170,7 +170,6 @@ warning[unused-ignore-comment]: Unused `ty: ignore` directive
   |
 9 |   + 2)  # ty:ignore[division-by-zero] # fmt: skip
   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
 help: Remove the unused suppression comment
    |
 8  |   # snapshot
@@ -192,7 +191,6 @@ warning[unused-ignore-comment]: Unused `ty: ignore` directive
    |
 12 |   + 2)  # fmt: skip # ty:ignore[division-by-zero]
    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
 help: Remove the unused suppression comment
    |
 11 |   # snapshot
@@ -265,6 +263,19 @@ a = 10 / 0  # error: [division-by-zero]
 b = a / 0  # error: [division-by-zero]
 ```
 
+Unlike `ty: ignore`, an own-line `type: ignore` does not suppress the following line (unless it
+appears before any Python statements in the file, in which case it suppresses the entire file). This
+preserves the standardized semantics of `type: ignore` comments.
+
+```py
+seen_code = True
+
+# error: [unused-type-ignore-comment]
+# type: ignore
+# error: [unresolved-reference]
+value = missing
+```
+
 ## `respect-type-ignore-comments=false`
 
 ty ignore `type-ignore` comments if `respect-type-ignore-comments` is set to false.
@@ -301,12 +312,11 @@ a = 10 / 2  # type: ignore[mypy-code, ty:division-by-zero]
 ```
 
 ```snapshot
-warning[unused-type-ignore-comment]: Unused `type: ignore` directive: 'division-by-zero'
+warning[unused-type-ignore-comment]: Unused `type: ignore` directive: 'ty:division-by-zero'
  --> src/mdtest_snippet.py:2:39
   |
 2 | a = 10 / 2  # type: ignore[mypy-code, ty:division-by-zero]
   |                                       ^^^^^^^^^^^^^^^^^^^
-  |
 help: Remove the unused suppression code
   |
 1 | # snapshot
@@ -328,7 +338,6 @@ warning[unused-type-ignore-comment]: Unused `type: ignore` directive
   |
 2 | a = 10 / 2  # type: ignore[ty:division-by-zero]
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
 help: Remove the unused suppression comment
   |
 1 | # snapshot
@@ -345,10 +354,9 @@ a = 10 / 2  # type: ignore[ty:division-by]
 ```
 
 ```snapshot
-warning[ignore-comment-unknown-rule]: Unknown rule `division-by`. Did you mean `division-by-zero`?
+warning[unknown-rule-in-ignore-comment]: Unknown rule `division-by`. Did you mean `division-by-zero`?
  --> src/mdtest_snippet.py:2:28
   |
 2 | a = 10 / 2  # type: ignore[ty:division-by]
   |                            ^^^^^^^^^^^^^^
-  |
 ```

@@ -224,7 +224,7 @@ impl LineIndex {
     }
 
     /// Returns `true` if the text only consists of ASCII characters
-    pub fn is_ascii(&self) -> bool {
+    fn is_ascii(&self) -> bool {
         self.kind().is_ascii()
     }
 
@@ -286,7 +286,7 @@ impl LineIndex {
 
     /// Returns the [byte offset](TextSize) of the `line`'s end.
     /// The offset is the end of the line, excluding the newline character ending the line (if any).
-    pub fn line_end_exclusive(&self, line: OneIndexed, contents: &str) -> TextSize {
+    pub(crate) fn line_end_exclusive(&self, line: OneIndexed, contents: &str) -> TextSize {
         let row_index = line.to_zero_indexed();
         let starts = self.line_starts();
 
@@ -580,7 +580,7 @@ impl OneIndexed {
     // SAFETY: These constants are being initialized with non-zero values
     /// The smallest value that can be represented by this integer type.
     pub const MIN: Self = Self::new(1).unwrap();
-    pub const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+    const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
     /// Creates a non-zero if the given value is not zero.
     pub const fn new(value: usize) -> Option<Self> {
@@ -661,7 +661,7 @@ impl OneIndexed {
         // `usize::MAX.ilog10()` << `usize::MAX`, so the result is always safe
         // to cast to a usize, even though it's returned as a u32
         // (u64::MAX.ilog10() is 19).
-        NonZeroUsize::new(1 + self.0.get().ilog10() as usize).unwrap()
+        NonZeroUsize::new(1 + self.0.ilog10() as usize).unwrap()
     }
 }
 

@@ -227,17 +227,14 @@ def f(x):
 
 ## Markdown code formatting
 
-*This feature is currently only available in [preview mode](preview.md#preview).*
-
 The Ruff formatter can also format Python code blocks in Markdown files.
 In these files, Ruff will format any CommonMark [fenced code blocks][] with
-the following info strings: `python`, `py`, `python3`, `py3`, or `pyi`. The
-formatter will automatically skip a code block if the code does not parse as
+the following info strings: `python`, `py`, `python3`, `py3`, `pyi`, or `pycon`.
+The formatter will automatically skip a code block if the code does not parse as
 valid Python or if the reformatted code would produce an invalid Python program.
 
-Code blocks marked as `python`, `py`, `python3`, or `py3` will be formatted with
-the normal Python code formatting style, while any code blocks marked with
-`pyi` will be formatted like Python type stub files:
+Code blocks marked as `pyi` are formatted like stub files, `pycon` blocks as
+REPL sessions, and the others use normal Python file formatting. For example:
 
 ````markdown
 ```py
@@ -272,8 +269,8 @@ print( 'hello' )
 ````
 
 Any number of code blocks may be contained within a matching pair of `off` and
-`on` HTML comments, and any `off`  comment *without* a matching `on` comment
-will implicitly cover the remaining portion of the document.
+`on` HTML comments. An `off` comment *without* a matching `on` comment covers
+the rest of the document.
 
 The Ruff formatter will also recognize HTML comments from [blacken-docs][],
 `<!-- blacken-docs:off -->` and `<!-- blacken-docs:on -->`, which are equivalent
@@ -306,7 +303,7 @@ support needs to be explicitly included by adding it to `types_or`:
 ```yaml title=".pre-commit-config.yaml"
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.20
+    rev: v0.17.6
     hooks:
       - id: ruff-format
         types_or: [python, pyi, jupyter, markdown]
@@ -430,16 +427,16 @@ When using Ruff as a formatter, we recommend avoiding the following lint rules:
 - [`indentation-with-invalid-multiple`](rules/indentation-with-invalid-multiple.md) (`E111`)
 - [`indentation-with-invalid-multiple-comment`](rules/indentation-with-invalid-multiple-comment.md) (`E114`)
 - [`over-indented`](rules/over-indented.md) (`E117`)
-- [`incorrect-blank-line-before-class`](rules/incorrect-blank-line-before-class.md) (`D203`)
+- [`incorrect-blank-line-before-class-docstring`](rules/incorrect-blank-line-before-class-docstring.md) (`D203`)
 - [`docstring-tab-indentation`](rules/docstring-tab-indentation.md) (`D206`)
-- [`triple-single-quotes`](rules/triple-single-quotes.md) (`D300`)
+- [`unconventional-docstring-quotes`](rules/unconventional-docstring-quotes.md) (`D300`)
 - [`bad-quotes-inline-string`](rules/bad-quotes-inline-string.md) (`Q000`)
 - [`bad-quotes-multiline-string`](rules/bad-quotes-multiline-string.md) (`Q001`)
 - [`bad-quotes-docstring`](rules/bad-quotes-docstring.md) (`Q002`)
 - [`avoidable-escaped-quote`](rules/avoidable-escaped-quote.md) (`Q003`)
 - [`unnecessary-escaped-quote`](rules/unnecessary-escaped-quote.md) (`Q004`)
 - [`missing-trailing-comma`](rules/missing-trailing-comma.md) (`COM812`)
-- [`prohibited-trailing-comma`](rules/prohibited-trailing-comma.md) (`COM819`)
+- [`unnecessary-trailing-comma`](rules/unnecessary-trailing-comma.md) (`COM819`)
 - [`multi-line-implicit-string-concatenation`](rules/multi-line-implicit-string-concatenation.md) (`ISC002`) if used without `ISC001` and `flake8-implicit-str-concat.allow-multiline = false`
 
 While the [`line-too-long`](rules/line-too-long.md) (`E501`) rule _can_ be used alongside the
@@ -664,7 +661,7 @@ while the stable formatting breaks _after_ the call or subscript.
 
 ## Sorting imports
 
-Currently, the Ruff formatter does not sort imports. In order to both sort imports and format,
+Currently, the Ruff formatter does not sort imports. To sort imports and format,
 call the Ruff linter and then the formatter:
 
 ```shell

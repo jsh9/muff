@@ -47,12 +47,24 @@ def _(string_instance: str, literalstring: LiteralString):
     reveal_type("a".startswith(literalstring))  # revealed: bool
 ```
 
+When the receiver is a union of string literals, each bound method keeps its own receiver.
+
+```py
+from typing import Literal
+
+def _(value: Literal["read", "reset"]):
+    startswith = value.startswith
+    reveal_type(startswith("re"))  # revealed: Literal[True]
+    reveal_type(startswith("read"))  # revealed: bool
+```
+
 Unlike bound methods for some other classes implemented in C, `"foo".startswith` is an instance of
 `types.BuiltinFunctionType` at runtime, rather than `types.MethodWrapperType`:
 
 ```py
 import types
-from ty_extensions import TypeOf, static_assert, is_subtype_of
+from ty_extensions import static_assert
+from ty_extensions._internal import TypeOf, is_subtype_of
 
 static_assert(is_subtype_of(TypeOf["foo".startswith], types.BuiltinFunctionType))
 

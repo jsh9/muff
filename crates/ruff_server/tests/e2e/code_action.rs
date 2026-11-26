@@ -4,6 +4,7 @@ use lsp_types::{
     Code, CodeAction, CodeActionKind, CodeActionResolveRequest, CodeActionResponse,
     DocumentDiagnosticReport,
 };
+use ruff_python_trivia::textwrap::dedent;
 
 use crate::TestServerBuilder;
 
@@ -27,6 +28,52 @@ fn no_code_actions_for_markdown() -> Result<()> {
 
     assert_json_snapshot!(actions, @"[]");
 
+    Ok(())
+}
+
+#[test]
+fn script_cannot_enable_unsafe_fixes() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(".")?
+        .with_server_preview(true)
+        .with_file("ruff.toml", "unsafe-fixes = false")?
+        .build();
+    server.open_text_document(
+        "script.py",
+        dedent(
+            r"
+            # /// script
+            # [tool.ruff]
+            # unsafe-fixes = true
+            # lint.select = ['T201']
+            # ///
+            import os
+
+            print('side effect')
+            ",
+        ),
+        1,
+    );
+    // Fix All would remove the unused import with the project's rules or the
+    // print call with the script's unsafe fixes enabled.
+    assert_json_snapshot!(server.code_action_request("script.py", vec![]), @r#"
+    [
+      {
+        "title": "Ruff: Fix all auto-fixable problems",
+        "kind": "source.fixAll.ruff",
+        "edit": {
+          "changes": {}
+        }
+      },
+      {
+        "title": "Ruff: Organize imports",
+        "kind": "source.organizeImports.ruff",
+        "edit": {
+          "changes": {}
+        }
+      }
+    ]
+    "#);
     Ok(())
 }
 
@@ -77,6 +124,111 @@ fn code_actions_for_python() -> Result<()> {
     ]
     "#
     );
+
+    Ok(())
+}
+
+#[test]
+fn code_actions_for_toml() -> Result<()> {
+    let source = r#"
+[lint]
+preview = true
+select = ["rule-codes-in-selectors"]
+extend-select = ["F401"]
+"#;
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(".")?
+        .with_file("ruff.toml", source)?
+        .build();
+
+    server.open_text_document_with_language_id("ruff.toml", "toml", source, 1);
+
+    let diagnostics = match server.document_diagnostic_request("ruff.toml", None) {
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(report) => {
+            report.full_document_diagnostic_report.items
+        }
+        DocumentDiagnosticReport::RelatedUnchangedDocumentDiagnosticReport(_) => {
+            panic!("Expected a full diagnostic report");
+        }
+    };
+    let actions = server
+        .code_action_request("ruff.toml", diagnostics)
+        .expect("Expected code actions");
+
+    assert_json_snapshot!(actions, @r#"
+    [
+      {
+        "title": "Ruff (rule-codes-in-selectors): Replace rule code with `unused-import`",
+        "kind": "quickfix",
+        "diagnostics": [
+          {
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 18
+              },
+              "end": {
+                "line": 4,
+                "character": 22
+              }
+            },
+            "severity": 2,
+            "code": "rule-codes-in-selectors",
+            "codeDescription": {
+              "href": "https://docs.astral.sh/ruff/rules/rule-codes-in-selectors"
+            },
+            "source": "Ruff",
+            "message": "Rule code used instead of name in `lint.extend-select`\n\nhelp: Replace rule code with `unused-import`",
+            "tags": []
+          }
+        ],
+        "isPreferred": true,
+        "edit": {
+          "changes": {
+            "file://<temp_dir>/ruff.toml": [
+              {
+                "range": {
+                  "start": {
+                    "line": 4,
+                    "character": 18
+                  },
+                  "end": {
+                    "line": 4,
+                    "character": 22
+                  }
+                },
+                "newText": "unused-import"
+              }
+            ]
+          }
+        },
+        "data": "file://<temp_dir>/ruff.toml"
+      },
+      {
+        "title": "Ruff: Fix all auto-fixable problems",
+        "kind": "source.fixAll.ruff",
+        "edit": {
+          "changes": {
+            "file://<temp_dir>/ruff.toml": [
+              {
+                "range": {
+                  "start": {
+                    "line": 4,
+                    "character": 0
+                  },
+                  "end": {
+                    "line": 5,
+                    "character": 0
+                  }
+                },
+                "newText": "extend-select = [\"unused-import\"]\n"
+              }
+            ]
+          }
+        }
+      }
+    ]
+    "#);
 
     Ok(())
 }

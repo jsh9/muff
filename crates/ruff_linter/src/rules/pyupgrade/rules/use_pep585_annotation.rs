@@ -7,6 +7,7 @@ use ruff_python_semantic::analyze::typing::ModuleMember;
 use ruff_text_size::Ranged;
 
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::importer::ImportRequest;
 use crate::preview::is_up006_future_annotations_fix_enabled;
 use crate::{Applicability, Edit, Fix, FixAvailability, Violation};
@@ -46,9 +47,9 @@ use crate::{Applicability, Edit, Fix, FixAvailability, Violation};
 /// ```
 ///
 /// ## Fix safety
-/// This rule's fix is marked as unsafe, as it may lead to runtime errors when
-/// alongside libraries that rely on runtime type annotations, like Pydantic,
-/// on Python versions prior to Python 3.9.
+/// This rule's fix is marked as unsafe on Python versions prior to Python 3.9,
+/// as the newer syntax may lead to runtime errors in libraries that rely on
+/// runtime type annotations, like Pydantic.
 ///
 /// In [preview], this rule can also add its own `__future__` import on Python
 /// 3.9 and earlier, if the [`lint.future-annotations`] setting is enabled. This
@@ -62,7 +63,7 @@ use crate::{Applicability, Edit, Fix, FixAvailability, Violation};
 /// [PEP 585]: https://peps.python.org/pep-0585/
 /// [preview]: https://docs.astral.sh/ruff/preview/
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.155")]
+#[violation_metadata(stable_since = "v0.0.155", category = Category::Suspicious)]
 pub(crate) struct NonPEP585Annotation {
     from: String,
     to: String,

@@ -67,7 +67,12 @@ impl super::SyncRequestHandler for ExecuteCommand {
 
         // check if we can apply a workspace edit
         if !session.resolved_client_capabilities().apply_edit {
-            return Err(anyhow::anyhow!("Cannot execute the '{}' command: the client does not support `workspace/applyEdit`", command.label())).with_failure_code(ErrorCode::InternalError);
+            return Err(anyhow::anyhow!(
+                "Cannot execute the '{}' command: \
+                the client does not support `workspace/applyEdit`",
+                command.label()
+            ))
+            .with_failure_code(ErrorCode::InternalError);
         }
 
         let mut arguments: Vec<Argument> = params
@@ -99,7 +104,7 @@ impl super::SyncRequestHandler for ExecuteCommand {
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
                 SupportedCommand::Format => {
-                    let fixes = super::format::format_full_document(&snapshot, client)?;
+                    let fixes = super::format::format_full_document(&snapshot)?;
                     edit_tracker
                         .set_fixes_for_document(fixes, version)
                         .with_failure_code(ErrorCode::InternalError)?;
@@ -214,8 +219,8 @@ config_path = {config_path:?}
             },
             version = query.version(),
             client_settings = snapshot.client_settings(),
-            config_path = query.settings().path(),
-            settings = query.settings(),
+            config_path = query.project_settings().path(),
+            settings = query.project_settings(),
         )?;
     } else {
         writeln!(

@@ -15,6 +15,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::Locator;
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::cst::helpers::space;
 use crate::cst::matchers::{match_function_def, match_if, match_indented_block, match_statement};
 use crate::fix::codemods::CodegenStylist;
@@ -63,7 +64,7 @@ use crate::{Edit, Fix, FixAvailability, Violation};
 /// - [Python documentation: The `if` statement](https://docs.python.org/3/reference/compound_stmts.html#the-if-statement)
 /// - [Python documentation: Boolean operations](https://docs.python.org/3/reference/expressions.html#boolean-operations)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "v0.0.211")]
+#[violation_metadata(stable_since = "v0.0.211", category = Category::Complexity)]
 pub(crate) struct CollapsibleIf;
 
 impl Violation for CollapsibleIf {
@@ -172,14 +173,14 @@ pub(super) enum NestedIf<'a> {
 }
 
 impl<'a> NestedIf<'a> {
-    pub(super) fn body(self) -> &'a [Stmt] {
+    fn body(self) -> &'a [Stmt] {
         match self {
             NestedIf::If(stmt_if) => &stmt_if.body,
             NestedIf::Elif(clause) => &clause.body,
         }
     }
 
-    pub(super) fn is_elif(self) -> bool {
+    fn is_elif(self) -> bool {
         matches!(self, NestedIf::Elif(..))
     }
 }
@@ -206,7 +207,6 @@ impl<'a> From<&NestedIf<'a>> for AnyNodeRef<'a> {
 fn nested_if_body(stmt_if: &ast::StmtIf) -> Option<NestedIf<'_>> {
     let ast::StmtIf {
         test,
-        body,
         elif_else_clauses,
         ..
     } = stmt_if;
@@ -226,7 +226,7 @@ fn nested_if_body(stmt_if: &ast::StmtIf) -> Option<NestedIf<'_>> {
 
     // The nested if must be the only child, otherwise there is at least one more statement that
     // only depends on the outer condition
-    if body.len() > 1 {
+    if nested_if.body().len() > 1 {
         return None;
     }
 
@@ -273,22 +273,16 @@ fn find_last_nested_if(body: &[Stmt]) -> Option<&Expr> {
 
 /// Returns `true` if an expression is an `if __name__ == "__main__":` check.
 fn is_main_check(expr: &Expr) -> bool {
-    if let Expr::Compare(ast::ExprCompare {
-        left, comparators, ..
-    }) = expr
+    if let Expr::Compare(ast::ExprCompare { operands, .. }) = expr
+        && let [
+            Expr::Name(ast::ExprName { id, .. }),
+            Expr::StringLiteral(ast::ExprStringLiteral { value, .. }),
+        ] = &**operands
     {
-        if let Expr::Name(ast::ExprName { id, .. }) = left.as_ref() {
-            if id == "__name__" {
-                if let [Expr::StringLiteral(ast::ExprStringLiteral { value, .. })] = &**comparators
-                {
-                    if value == "__main__" {
-                        return true;
-                    }
-                }
-            }
-        }
+        id == "__name__" && value == "__main__"
+    } else {
+        false
     }
-    false
 }
 
 fn parenthesize_and_operand(expr: libcst_native::Expression) -> libcst_native::Expression {
@@ -316,11 +310,7 @@ fn parenthesize_and_operand(expr: libcst_native::Expression) -> libcst_native::E
 }
 
 /// Convert `if a: if b:` to `if a and b:`.
-pub(super) fn collapse_nested_if(
-    locator: &Locator,
-    stylist: &Stylist,
-    nested_if: NestedIf,
-) -> Result<Edit> {
+fn collapse_nested_if(locator: &Locator, stylist: &Stylist, nested_if: NestedIf) -> Result<Edit> {
     // Infer the indentation of the outer block.
     let Some(outer_indent) = whitespace::indentation(locator.contents(), &nested_if) else {
         bail!("Unable to fix multiline statement");

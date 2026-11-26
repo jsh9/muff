@@ -33,7 +33,7 @@ pub(crate) enum ConfigurationPreference {
     EditorOnly,
 }
 
-/// A direct representation of of `configuration` schema within the client settings.
+/// A direct representation of the `configuration` schema within the client settings.
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[serde(untagged)]
@@ -58,18 +58,23 @@ pub(crate) struct GlobalOptions {
 }
 
 impl GlobalOptions {
-    pub(crate) fn set_preview(&mut self, preview: bool) {
+    fn set_preview(&mut self, preview: bool) {
         self.client.set_preview(preview);
     }
 
     #[cfg(test)]
-    pub(crate) fn client(&self) -> &ClientOptions {
+    fn client(&self) -> &ClientOptions {
         &self.client
     }
 
-    pub(crate) fn into_settings(self, client: Client) -> GlobalClientSettings {
+    pub(crate) fn into_settings(
+        self,
+        client: Client,
+        server_preview: Option<bool>,
+    ) -> GlobalClientSettings {
         GlobalClientSettings {
             options: self.client,
+            server_preview,
             settings: std::cell::OnceCell::default(),
             client,
         }
@@ -107,7 +112,10 @@ impl ClientOptions {
         clippy::result_large_err,
         reason = "The error is as large as the Ok variant"
     )]
-    pub(crate) fn into_settings(self) -> Result<ClientSettings, ClientSettings> {
+    pub(crate) fn into_settings(
+        self,
+        server_preview: Option<bool>,
+    ) -> Result<ClientSettings, ClientSettings> {
         let code_action = self.code_action.unwrap_or_default();
         let lint = self.lint.unwrap_or_default();
         let format = self.format.unwrap_or_default();
@@ -125,6 +133,7 @@ impl ClientOptions {
         });
 
         let editor_settings = EditorSettings {
+            server_preview,
             configuration,
             lint_preview: lint.preview,
             format_preview: format.preview,
@@ -169,7 +178,7 @@ impl ClientOptions {
     }
 
     /// Update the preview flag for the linter and the formatter with the given value.
-    pub(crate) fn set_preview(&mut self, preview: bool) {
+    fn set_preview(&mut self, preview: bool) {
         match self.lint.as_mut() {
             None => self.lint = Some(LintOptions::default().with_preview(preview)),
             Some(lint) => lint.set_preview(preview),
@@ -350,8 +359,14 @@ impl AllOptions {
         Self::from_init_options(
             serde_json::from_value(options)
                 .map_err(|err| {
-                    tracing::error!("Failed to deserialize initialization options: {err}. Falling back to default client settings...");
-                    client.show_error_message("Ruff received invalid client settings - falling back to default client settings.");
+                    tracing::error!(
+                        "Failed to deserialize initialization options: {err}. \
+                        Falling back to default client settings..."
+                    );
+                    client.show_error_message(
+                        "Ruff received invalid client settings - \
+                        falling back to default client settings.",
+                    );
                 })
                 .unwrap_or_default(),
         )
@@ -485,8 +500,6 @@ impl_noop_combine!(LineLength);
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use insta::assert_debug_snapshot;
     use ruff_linter::settings::types::PreviewMode;
     use ruff_python_formatter::QuoteStyle;
@@ -518,9 +531,15 @@ mod tests {
     }
 
     #[test]
+    fn server_preview_is_applied_when_resolving_client_options() {
+        let settings = ClientOptions::default().into_settings(Some(true)).unwrap();
+        assert_eq!(settings.editor_settings.server_preview, Some(true));
+    }
+
+    #[test]
     fn client_options_rule_selectors_use_editor_source() {
         let options: ClientOptions = deserialize_fixture(r#"{"lint": {"select": ["F481"]}}"#);
-        let settings = options.into_settings().unwrap();
+        let settings = options.into_settings(None).unwrap();
         let selector = &settings.editor_settings.select.unwrap()[0];
 
         assert_eq!(selector.source(), &ValueSource::Editor);
@@ -740,6 +759,8 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_vs_code_workspace_settings_resolve() {
+        use std::str::FromStr;
+
         let options = deserialize_fixture(VS_CODE_INIT_OPTIONS_FIXTURE);
         let AllOptions {
             global,
@@ -755,7 +776,7 @@ mod tests {
             .clone();
         let workspace_settings = workspace_options
             .combine(global.client().clone())
-            .into_settings()
+            .into_settings(None)
             .unwrap();
 
         assert_eq!(
@@ -768,6 +789,7 @@ mod tests {
                 fix_violation_enable: false,
                 show_syntax_errors: true,
                 editor_settings: EditorSettings {
+                    server_preview: None,
                     configuration: None,
                     lint_preview: Some(true),
                     format_preview: None,
@@ -793,7 +815,7 @@ mod tests {
 
         let workspace_settings = workspace_options
             .combine(global.client().clone())
-            .into_settings()
+            .into_settings(None)
             .unwrap();
 
         assert_eq!(
@@ -806,6 +828,7 @@ mod tests {
                 fix_violation_enable: false,
                 show_syntax_errors: true,
                 editor_settings: EditorSettings {
+                    server_preview: None,
                     configuration: None,
                     lint_preview: Some(false),
                     format_preview: None,
@@ -896,7 +919,7 @@ mod tests {
 
         let AllOptions { global, .. } = AllOptions::from_init_options(options);
         let client = Client::new(main_loop_sender, client_sender);
-        let global = global.into_settings(client);
+        let global = global.into_settings(client, None);
         assert_eq!(
             global.to_settings(),
             &ClientSettings {
@@ -907,6 +930,7 @@ mod tests {
                 fix_violation_enable: true,
                 show_syntax_errors: true,
                 editor_settings: EditorSettings {
+                    server_preview: None,
                     configuration: None,
                     lint_preview: None,
                     format_preview: None,
@@ -978,7 +1002,7 @@ mod tests {
             panic!("Expected global settings only");
         };
 
-        let global = global.into_settings(client);
+        let global = global.into_settings(client, None);
 
         assert_eq!(
             global.to_settings(),
@@ -990,6 +1014,7 @@ mod tests {
                 fix_violation_enable: true,
                 show_syntax_errors: true,
                 editor_settings: EditorSettings {
+                    server_preview: None,
                     configuration: Some(ResolvedConfiguration::Inline(Box::new(Options {
                         line_length: Some(LineLength::try_from(100).unwrap()),
                         lint: Some(LintOptions {

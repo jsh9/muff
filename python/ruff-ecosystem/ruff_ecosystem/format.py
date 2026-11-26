@@ -173,7 +173,9 @@ async def format_then_format(
     config_overrides: ConfigOverrides,
     cloned_repo: ClonedRepository,
 ) -> Sequence[str]:
-    with config_overrides.patch_config(cloned_repo.path, options.preview):
+    with config_overrides.patch_config(
+        cloned_repo.path, options.preview, ruff_comparison_executable.resolve()
+    ):
         # Run format to get the baseline
         await format(
             formatter=baseline_formatter,
@@ -201,7 +203,9 @@ async def format_and_format(
     config_overrides: ConfigOverrides,
     cloned_repo: ClonedRepository,
 ) -> Sequence[str]:
-    with config_overrides.patch_config(cloned_repo.path, options.preview):
+    with config_overrides.patch_config(
+        cloned_repo.path, options.preview, ruff_comparison_executable.resolve()
+    ):
         # Run format without diff to get the baseline
         await format(
             formatter=baseline_formatter,
@@ -218,7 +222,9 @@ async def format_and_format(
     # Then reset
     await cloned_repo.reset()
 
-    with config_overrides.patch_config(cloned_repo.path, options.preview):
+    with config_overrides.patch_config(
+        cloned_repo.path, options.preview, ruff_comparison_executable.resolve()
+    ):
         # Then run format again
         await format(
             formatter=Formatter.ruff,
