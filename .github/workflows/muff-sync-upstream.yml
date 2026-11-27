@@ -1,0 +1,70 @@
+# Open a pull request that merges each new Ruff release into Muff.
+#
+# This workflow is specific to the Muff fork. Every day, it compares Muff's version (in
+# `pyproject.toml`) with Ruff's latest release. If Ruff is newer, `.github/muff-sync-upstream.sh`
+# merges Ruff's release tag into a new branch, `muff-sync/ruff-<version>`, and opens a pull request.
+# The script resolves the conflicts that come up in every release:
+#
+# - `pyproject.toml`: Ruff bumps the version right below the package name, which Muff changes.
+# - Ruff's workflows: they need Astral's paid runners, so Muff deletes them, and the script removes
+#   any that the merge would add back. Only workflows named `muff-*` are kept.
+#
+# Any other conflict is committed with its conflict markers, and the pull request is opened as a
+# draft that lists the files to fix. The script also checks that the merge kept Muff's own changes.
+#
+# The pull request runs `[muff] Release` as a dry run, which builds and tests Muff on every
+# platform. Merging the pull request with a merge commit releases the new version (see
+# `muff-release.yml`).
+#
+# `MUFF_AUTOMATION_TOKEN` is a fine-grained personal access token with access to `jsh9/muff` and
+# `jsh9/muff-pre-commit`, and read and write permissions for contents, pull requests, workflows,
+# and actions. `GITHUB_TOKEN` is not enough, because it cannot push commits that change
+# `.github/workflows/` (merges of Ruff releases usually do), and pull requests that it opens do not
+# start other workflows. `muff-release.yml` uses the same token to update muff-pre-commit.
+name: "[muff] Sync with Ruff"
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      ruff-version:
+        description: "Ruff release to merge, for example 0.17.7 (default: Ruff's latest release)"
+        type: string
+        default: ""
+      dry-run:
+        description: "Only merge in the runner and show the pull request; do not push or open it"
+        type: boolean
+        default: false
+
+concurrency:
+  group: muff-sync-upstream
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  sync:
+    # The sync branch starts from the checked-out commit, so it must be `main`.
+    if: ${{ github.repository == 'jsh9/muff' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge needs the full history to find the last Ruff release that Muff merged.
+          fetch-depth: 0
+          token: ${{ secrets.MUFF_AUTOMATION_TOKEN }}
+          # The sync script pushes the branch with this token. Nothing else runs in this job.
+          persist-credentials: true # zizmor: ignore[artipacked]
+      - name: "Configure Git"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: "Merge Ruff release and open pull request"
+        env:
+          GH_TOKEN: ${{ secrets.MUFF_AUTOMATION_TOKEN }}
+          MUFF_REPO: ${{ github.repository }}
+          RUFF_VERSION: ${{ inputs.ruff-version }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: .github/muff-sync-upstream.sh
