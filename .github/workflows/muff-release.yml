@@ -5,30 +5,39 @@
 # which are not available to this repository. This workflow only uses standard GitHub-hosted
 # runners, which are free for public repositories.
 #
-# The action pins and the maturin version below follow `.github/workflows/build-binaries.yml`.
-# Upstream merges update that file but not this one, so bump them here when they fall behind.
+# The action pins and the maturin version below follow Ruff's `.github/workflows/build-binaries.yml`
+# (https://github.com/astral-sh/ruff/blob/main/.github/workflows/build-binaries.yml). Muff does not
+# keep Ruff's workflows, so bump them here when they fall behind Ruff's.
 #
 # How to release:
 #
-# 1. Merge `upstream/main` into `main` and push. The version comes from `pyproject.toml`, which
-#    is updated by the merge.
-# 2. Go to Actions -> "[muff] Release" -> "Run workflow" on `main`, and uncheck "dry-run".
+# A push to `main` that changes the version in `pyproject.toml` releases that version. Usually
+# this is the merge of a pull request from `[muff] Sync with Ruff` (`muff-sync-upstream.yml`),
+# which brings in a Ruff release and its version. To release by hand instead, or to retry a
+# failed release, go to Actions -> "[muff] Release" -> "Run workflow" on `main`, and uncheck
+# "dry-run".
 #
 # The release runs in this order, so that nothing becomes public until every step has worked:
 #
-# 1. `plan` fails right away if the version is malformed, the run is not on `main`, the tag
-#    already exists, or the version is already on PyPI.
+# 1. `plan` checks the version and that the run is on `main`. A push whose version has already
+#    been released stops here without an error. Otherwise, `plan` fails right away if the tag
+#    already exists, the version is already on PyPI, or the Ruff release with the same version
+#    is not in the history of the commit being released.
 # 2. `sdist` and `build` build and test the sdist, wheels, and standalone binaries.
 # 3. `github-release` uploads everything to a *draft* GitHub release.
 # 4. `pypi-publish` publishes the sdist and wheels to PyPI.
 # 5. `publish-release` publishes the draft, which creates the tag on the built commit.
+# 6. `update-pre-commit` starts the workflow in `jsh9/muff-pre-commit` that points the hooks at
+#    the new version.
 #
 # If a step fails:
 #
 # - In steps 1-4, nothing public has changed. Fix the problem and either use "Re-run failed jobs"
-#   or start a new run (a new run replaces the leftover draft release).
+#   or start a manual run (a new run replaces the leftover draft release).
 # - In step 5, PyPI already has the release, so a new run would stop at `plan`. Use "Re-run failed
 #   jobs", or publish the draft release by hand on GitHub.
+# - In step 6, use "Re-run failed jobs", or run the `main` workflow in `jsh9/muff-pre-commit` by
+#   hand. Step 6 needs the `MUFF_AUTOMATION_TOKEN` secret described in `muff-sync-upstream.yml`.
 #
 # PyPI publishing uses trusted publishing, so no API token is needed. The PyPI project must list
 # this repository, the workflow file `muff-release.yml`, and the environment `pypi` as a trusted
@@ -45,6 +54,11 @@ on:
         description: "Only build and test; do not create a GitHub release or publish to PyPI"
         type: boolean
         default: true
+  push:
+    branches: [main]
+    # The version is in `pyproject.toml`. `plan` skips the release if the version did not change.
+    paths:
+      - pyproject.toml
   pull_request:
     paths:
       - .github/workflows/muff-release.yml
@@ -93,9 +107,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry-run }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
+
+          # - `release`: a manual run with "dry-run" unchecked. Any problem stops the run.
+          # - `auto`: a push to `main` that changed `pyproject.toml`. Releases the version if it has
+          #   not been released yet, and otherwise does nothing (the push changed something else).
+          # - `check`: a dry run or a pull request. Problems are only reported as warnings.
+          case "${GITHUB_EVENT_NAME}:${DRY_RUN}" in
+            workflow_dispatch:false) mode="release" ;;
+            push:*) mode="auto" ;;
+            *) mode="check" ;;
+          esac
+          echo "Mode: ${mode}"
 
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           echo "Muff version: ${version}"
@@ -117,9 +142,12 @@ jobs:
               || echo "000"
           }
 
+          # `released` lists the signs that this version has already been released. `problems` lists
+          # everything else that should stop a release.
+          released=()
           problems=()
 
-          if [[ "${RELEASE}" == "true" && "${GITHUB_REF}" != "refs/heads/main" ]]; then
+          if [[ "${mode}" != "check" && "${GITHUB_REF}" != "refs/heads/main" ]]; then
             problems+=("Releases must run on main, not ${GITHUB_REF}.")
           fi
 
@@ -129,34 +157,57 @@ jobs:
             "${GITHUB_API_URL}/repos/${GH_REPO}/git/ref/tags/${version}")"
           case "${tag_status}" in
             404) ;;
-            200) problems+=("Tag ${version} already exists in ${GH_REPO}.") ;;
+            200) released+=("Tag ${version} already exists in ${GH_REPO}.") ;;
             *) problems+=("Could not check whether tag ${version} exists (HTTP ${tag_status}).") ;;
           esac
 
           pypi_status="$(http_status "https://pypi.org/pypi/muff/${version}/json")"
           case "${pypi_status}" in
             404) ;;
-            200) problems+=("muff ${version} is already on PyPI.") ;;
+            200) released+=("muff ${version} is already on PyPI.") ;;
             *) problems+=("Could not check whether muff ${version} is on PyPI (HTTP ${pypi_status}).") ;;
           esac
 
-          if [[ ${#problems[@]} -gt 0 ]]; then
-            for problem in "${problems[@]}"; do
-              if [[ "${RELEASE}" == "true" ]]; then
-                echo "::error::${problem}"
-              else
-                echo "::warning::${problem} (ignored because this run does not release)"
-              fi
-            done
-            if [[ "${RELEASE}" == "true" ]]; then
-              exit 1
+          # The Ruff release must be part of this commit's history. It is not if a pull request from
+          # `[muff] Sync with Ruff` was squash-merged or rebased, which copies Ruff's changes without
+          # recording the merge, so that the next sync conflicts on everything Ruff changed since.
+          if [[ -n "${ruff_version}" ]]; then
+            if ! ruff_commit="$(gh api "repos/astral-sh/ruff/commits/${ruff_version}" --jq .sha)"; then
+              problems+=("Could not find the commit of Ruff ${ruff_version}.")
+            elif ! ancestry="$(gh api "repos/${GH_REPO}/compare/${ruff_commit}...${GITHUB_SHA}" --jq .status)"; then
+              problems+=("Could not compare Ruff ${ruff_version} (${ruff_commit}) with ${GITHUB_SHA}.")
+            elif [[ "${ancestry}" != "ahead" && "${ancestry}" != "identical" ]]; then
+              problems+=("Ruff ${ruff_version} (${ruff_commit}) is not in the history of ${GITHUB_SHA}. Was the sync pull request merged without a merge commit? Revert it and merge Ruff ${ruff_version} again.")
             fi
           fi
+
+          release="false"
+          if [[ "${mode}" == "auto" && ${#released[@]} -gt 0 ]]; then
+            for reason in "${released[@]}"; do
+              echo "::notice::${reason} Nothing to release."
+            done
+          else
+            problems+=("${released[@]}")
+            for problem in "${problems[@]}"; do
+              if [[ "${mode}" == "check" ]]; then
+                echo "::warning::${problem} (ignored because this run does not release)"
+              else
+                echo "::error::${problem}"
+              fi
+            done
+            if [[ "${mode}" != "check" ]]; then
+              if [[ ${#problems[@]} -gt 0 ]]; then
+                exit 1
+              fi
+              release="true"
+            fi
+          fi
+          echo "Release: ${release}"
 
           {
             echo "version=${version}"
             echo "ruff-version=${ruff_version}"
-            echo "release=${RELEASE}"
+            echo "release=${release}"
           } >> "$GITHUB_OUTPUT"
 
   sdist:
@@ -429,3 +480,33 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.plan.outputs.version }}
         run: gh release edit "${VERSION}" --draft=false --latest
+
+  update-pre-commit:
+    needs: [plan, publish-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: "Update muff-pre-commit"
+        env:
+          # `GITHUB_TOKEN` cannot start workflows in other repositories.
+          GH_TOKEN: ${{ secrets.MUFF_AUTOMATION_TOKEN }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The `main` workflow in muff-pre-commit finds new versions with PyPI's JSON API, which can
+          # take a few minutes to list a new release. Wait until it does, so that the run is not a
+          # no-op.
+          for _ in $(seq 1 40); do
+            if curl --silent --fail --retry 3 "https://pypi.org/pypi/muff/json" \
+              | jq --exit-status --arg version "${VERSION}" '.releases | has($version)' > /dev/null
+            then
+              gh workflow run main.yml --repo jsh9/muff-pre-commit --ref main
+              echo "Started the main workflow in jsh9/muff-pre-commit for muff ${VERSION}."
+              exit 0
+            fi
+            sleep 30
+          done
+
+          echo "::error::PyPI's JSON API did not list muff ${VERSION} after 20 minutes. Run the main workflow in jsh9/muff-pre-commit by hand."
+          exit 1
